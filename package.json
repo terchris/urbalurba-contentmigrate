@@ -1,0 +1,39 @@
+{
+  "name": "urbalurba-contentmigrate",
+  "version": "0.1.0",
+  "description": "AI-powered website content migration — uses a powerful LLM to analyse any site and a local LLM to bulk-extract structured Markdown + YAML front matter, ready for any static site generator.",
+  "type": "module",
+  "scripts": {
+    "check-ollama": "tsx scripts/check-ollama.ts",
+    "classify": "tsx scripts/classify-pages.ts",
+    "extract": "tsx scripts/orchestrator.ts",
+    "extract:ollama": "tsx scripts/orchestrator.ts --tier ollama",
+    "extract:claude": "tsx scripts/orchestrator.ts --tier claude",
+    "validate": "tsx scripts/validate.ts"
+  },
+  "keywords": [
+    "content-migration",
+    "website-migration",
+    "markdown",
+    "front-matter",
+    "llm",
+    "ollama",
+    "crawl4ai",
+    "static-site-generator"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "ollama": "^0.5.0",
+    "zod": "^3.23.0",
+    "zod-to-json-schema": "^3.23.0",
+    "gray-matter": "^4.0.3",
+    "chalk": "^5.3.0",
+    "glob": "^11.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0",
+    "@types/node": "^22.0.0"
+  }
+}

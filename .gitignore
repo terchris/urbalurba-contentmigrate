@@ -137,3 +137,10 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Content migration output (generated, not checked in)
+crawl-output/
+content/
+content-run*/
+images/
+reports/
