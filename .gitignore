@@ -143,6 +143,7 @@ vite.config.ts.timestamp-*
 .devcontainer.secrets/
 
 # Content migration output (generated, not checked in)
+output/
 crawl-output/
 content/
 content-run*/

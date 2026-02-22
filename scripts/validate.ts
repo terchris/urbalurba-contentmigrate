@@ -1,15 +1,16 @@
 /**
  * validate.ts
  *
- * Validates all extracted .md files in content/.
+ * Validates all extracted .md files from a run folder.
  * Checks required frontmatter fields per archetype, format correctness,
  * and flags issues for review.
  *
- * Now config-driven: loads required fields from site-config.yaml
- * instead of hardcoded REQUIRED_FIELDS.
+ * Config-driven: loads required fields from site-config.yaml.
+ * Multi-run aware: finds the latest run folder or accepts --run flag.
  *
  * Usage:
- *   npx tsx scripts/validate.ts [--config site-config.yaml]
+ *   npx tsx scripts/validate.ts --config output/<slug>/site-config.yaml
+ *   npx tsx scripts/validate.ts --config output/<slug>/site-config.yaml --run 2026-02-22T18-00
  *
  * Follow the standard: docs/ai-developer/rules/script-standard.md
  * TypeScript specifics: docs/ai-developer/rules/typescript.md
@@ -43,11 +44,55 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_CONFIG_PATH = "./site-config.yaml";
 
-const PATHS = {
-  projectRoot: PROJECT_ROOT,
-  content: path.join(PROJECT_ROOT, "content"),
-  reports: path.join(PROJECT_ROOT, "reports"),
-} as const;
+/**
+ * Find the latest timestamped run folder under output/<slug>/runs/.
+ * Returns the full path, or null if no runs exist.
+ */
+function findLatestRun(siteDir: string): string | null {
+  const runsDir = path.join(siteDir, "runs");
+  if (!fs.existsSync(runsDir)) return null;
+
+  const entries = fs.readdirSync(runsDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort()          // ISO-style timestamps sort lexicographically
+    .reverse();      // newest first
+
+  if (entries.length === 0) return null;
+  return path.join(runsDir, entries[0]);
+}
+
+/**
+ * Derive all working paths from the config file location and optional run name.
+ *
+ * When config is at output/<slug>/site-config.yaml:
+ *   siteDir  = output/<slug>/
+ *   runDir   = output/<slug>/runs/<timestamp>/  (latest or specified)
+ *   content  = output/<slug>/runs/<timestamp>/content/
+ *   reports  = output/<slug>/runs/<timestamp>/reports/
+ */
+function computeValidatePaths(configPath: string, runName?: string) {
+  const siteDir = path.dirname(path.resolve(configPath));
+
+  let runDir: string | null;
+  if (runName) {
+    runDir = path.join(siteDir, "runs", runName);
+  } else {
+    runDir = findLatestRun(siteDir);
+  }
+
+  if (!runDir || !fs.existsSync(runDir)) {
+    return null; // No run found
+  }
+
+  return {
+    projectRoot: PROJECT_ROOT,
+    siteDir,
+    runDir,
+    content: path.join(runDir, "content"),
+    reports: path.join(runDir, "reports"),
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LOGGING
@@ -85,14 +130,15 @@ ${SCRIPT_NAME} (v${SCRIPT_VER})
 ${SCRIPT_DESCRIPTION}
 
 Usage:
-  npx tsx scripts/${SCRIPT_ID}.ts [options]
+  npx tsx scripts/${SCRIPT_ID}.ts --config output/<slug>/site-config.yaml [options]
 
 Options:
   --config PATH  Path to site-config.yaml (default: ${DEFAULT_CONFIG_PATH})
+  --run NAME     Specific run folder name (default: latest)
   -h, --help     Show this help message
 
 Prerequisites:
-  - Extracted .md files must exist in content/
+  - Extracted .md files must exist in a run folder
   - A valid site-config.yaml must exist
 
 Metadata:
@@ -123,7 +169,7 @@ export interface ValidationResult {
 // ARGUMENT PARSING
 // ─────────────────────────────────────────────────────────────────────────────
 
-function parseArgs(): { configPath: string } {
+function parseArgs(): { configPath: string; runName?: string } {
   const args = process.argv.slice(2);
 
   // Check for help flag first
@@ -133,14 +179,17 @@ function parseArgs(): { configPath: string } {
   }
 
   let configPath = DEFAULT_CONFIG_PATH;
+  let runName: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--config" && args[i + 1]) {
       configPath = args[++i];
+    } else if (args[i] === "--run" && args[i + 1]) {
+      runName = args[++i];
     }
   }
 
-  return { configPath };
+  return { configPath, runName };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -300,7 +349,7 @@ export function validateFile(
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const { configPath } = parseArgs();
+  const { configPath, runName } = parseArgs();
   logStart();
 
   // Load site configuration
@@ -315,19 +364,29 @@ async function main() {
     process.exit(1);
   }
 
+  // Compute paths from config file location
+  const PATHS = computeValidatePaths(configPath, runName);
+  if (!PATHS) {
+    const siteDir = path.dirname(path.resolve(configPath));
+    logError(`ERR002: No run folder found in ${path.join(siteDir, "runs")}`);
+    logInfo("Run extraction first: npx tsx scripts/orchestrator.ts --config " + configPath);
+    process.exit(1);
+  }
+
   // Build required fields map from config
   const requiredFieldsMap: Record<string, string[]> = {};
   for (const ct of site.config.content_types) {
     requiredFieldsMap[ct.name] = ct.required_fields;
   }
 
-  logInfo(`Site: ${site.siteName}`);
+  logInfo(`Site:    ${site.siteName}`);
+  logInfo(`Run dir: ${PATHS.runDir}`);
 
   const mdFiles = walkMdFiles(PATHS.content);
 
   if (mdFiles.length === 0) {
-    logError(`ERR002: No .md files found in ${PATHS.content}`);
-    logInfo(`Run: npm run extract -- --config ${configPath}`);
+    logError(`ERR003: No .md files found in ${PATHS.content}`);
+    logInfo("Run extraction first: npx tsx scripts/orchestrator.ts --config " + configPath);
     process.exit(1);
   }
 
@@ -377,6 +436,7 @@ async function main() {
         timestamp: new Date().toISOString(),
         configPath,
         siteUrl: site.siteUrl,
+        runDir: PATHS.runDir,
         totalFiles: mdFiles.length,
         valid: validCount,
         invalid: invalidCount,

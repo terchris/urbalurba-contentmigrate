@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { assembleConfig } from "../src/analyse/assemble-config.js";
+import { assembleConfig, deriveSiteSlug } from "../src/analyse/assemble-config.js";
 import type { DiscoveredType } from "../src/analyse/discover-types.js";
 import type { GeneratedTypeConfig, GeneratedCleanupRule } from "../src/analyse/generate-config.js";
 
@@ -215,6 +215,15 @@ describe("assembleConfig", () => {
     );
 
     expect(config.cleanup.patterns).toEqual([]);
+  });
+
+  it("deriveSiteSlug uses full hostname minus www, dots to hyphens", () => {
+    expect(deriveSiteSlug("https://www.smartebyernorge.no")).toBe("smartebyernorge-no");
+    expect(deriveSiteSlug("https://example.com")).toBe("example-com");
+    expect(deriveSiteSlug("https://docs.example.com")).toBe("docs-example-com");
+    expect(deriveSiteSlug("https://www.my-site.org")).toBe("my-site-org");
+    expect(deriveSiteSlug("https://WWW.EXAMPLE.COM")).toBe("example-com");
+    expect(deriveSiteSlug("invalid")).toBe("unknown-site");
   });
 
   it("all content types have base: true", () => {

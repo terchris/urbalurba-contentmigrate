@@ -102,6 +102,32 @@ export function deriveSiteName(siteUrl: string): string {
 }
 
 /**
+ * Derive a filesystem-safe site slug from the URL.
+ *
+ * Uses the full hostname (minus www.), lowercased, dots replaced with hyphens.
+ *
+ * Examples:
+ *   "https://www.smartebyernorge.no" → "smartebyernorge-no"
+ *   "https://docs.example.com" → "docs-example-com"
+ *   "https://example.com" → "example-com"
+ *   "https://www.my-site.org" → "my-site-org"
+ */
+export function deriveSiteSlug(siteUrl: string): string {
+  try {
+    const url = new URL(siteUrl);
+    let hostname = url.hostname.toLowerCase();
+
+    // Remove www. prefix
+    hostname = hostname.replace(/^www\./, "");
+
+    // Replace dots with hyphens for filesystem safety
+    return hostname.replace(/\./g, "-");
+  } catch {
+    return "unknown-site";
+  }
+}
+
+/**
  * Assemble a complete site-config structure from all analysis outputs.
  *
  * @param siteUrl - The site URL

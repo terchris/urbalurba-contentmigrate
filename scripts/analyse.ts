@@ -11,6 +11,11 @@
  * Uses the Claude Code CLI (`claude --print`) with the user's Max/Pro
  * subscription — no ANTHROPIC_API_KEY needed.
  *
+ * Output structure:
+ *   output/<site-slug>/site-config.yaml      — generated config
+ *   output/<site-slug>/crawl-output/*.json    — crawled page data
+ *   output/<site-slug>/reports/               — analyse log
+ *
  * Usage:
  *   npx tsx scripts/analyse.ts --url https://www.example.com [options]
  *
@@ -27,14 +32,14 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { stringify as yamlStringify } from "yaml";
-import { samplePages, type SamplePage } from "../src/analyse/sample-crawler.js";
+import { samplePages, loadCrawlOutput, type SamplePage } from "../src/analyse/sample-crawler.js";
 import { discoverContentTypes } from "../src/analyse/discover-types.js";
 import {
   generateSchemaAndPrompt,
   generateCleanupRules,
   type GeneratedTypeConfig,
 } from "../src/analyse/generate-config.js";
-import { assembleConfig } from "../src/analyse/assemble-config.js";
+import { assembleConfig, deriveSiteSlug } from "../src/analyse/assemble-config.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SCRIPT METADATA
@@ -42,7 +47,7 @@ import { assembleConfig } from "../src/analyse/assemble-config.js";
 
 const SCRIPT_ID = "analyse";
 const SCRIPT_NAME = "Analyse Site";
-const SCRIPT_VER = "0.1.0";
+const SCRIPT_VER = "0.2.0";
 const SCRIPT_DESCRIPTION = "Analyse a website and generate site-config.yaml for content migration.";
 const SCRIPT_CATEGORY = "MIGRATION";
 
@@ -52,8 +57,8 @@ const SCRIPT_CATEGORY = "MIGRATION";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "..");
+const OUTPUT_ROOT = path.join(PROJECT_ROOT, "output");
 const DEFAULT_SAMPLE_SIZE = 30;
-const DEFAULT_OUTPUT = "./site-config.yaml";
 const MAX_PAGES_FOR_CLEANUP = 5;
 const MAX_PAGES_PER_TYPE = 3;
 
@@ -95,11 +100,14 @@ Usage:
 Options:
   --url URL           Site URL to analyse (required)
   --sample N          Number of sample pages to crawl (default: ${DEFAULT_SAMPLE_SIZE})
-  --output PATH       Output config file path (default: ${DEFAULT_OUTPUT})
   --model MODEL       Claude model to use (optional, uses CLI default)
   --dry-run           Show what would be generated without writing files
   --skip-crawl        Skip crawling, reuse existing crawl-output/ files
   -h, --help          Show this help message
+
+Output:
+  All output goes to output/<site-slug>/ where site-slug is derived
+  from the URL hostname (e.g. smartebyernorge-no).
 
 Prerequisites:
   - Claude Code CLI (claude) must be installed and authenticated
@@ -124,7 +132,6 @@ Metadata:
 interface AnalyseArgs {
   url: string;
   sample: number;
-  output: string;
   model?: string;
   dryRun: boolean;
   skipCrawl: boolean;
@@ -145,7 +152,6 @@ function parseArgs(): AnalyseArgs {
 
   let url = "";
   let sample = DEFAULT_SAMPLE_SIZE;
-  let output = DEFAULT_OUTPUT;
   let model: string | undefined;
   let dryRun = false;
   let skipCrawl = false;
@@ -155,8 +161,6 @@ function parseArgs(): AnalyseArgs {
       url = args[++i];
     } else if (args[i] === "--sample" && args[i + 1]) {
       sample = parseInt(args[++i], 10);
-    } else if (args[i] === "--output" && args[i + 1]) {
-      output = args[++i];
     } else if (args[i] === "--model" && args[i + 1]) {
       model = args[++i];
     } else if (args[i] === "--dry-run") {
@@ -172,7 +176,7 @@ function parseArgs(): AnalyseArgs {
     process.exit(1);
   }
 
-  return { url, sample, output, model, dryRun, skipCrawl };
+  return { url, sample, model, dryRun, skipCrawl };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -208,34 +212,25 @@ function checkPrerequisites(skipCrawl: boolean): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HELPER: load existing crawl output
+// HELPER: compute site paths
 // ─────────────────────────────────────────────────────────────────────────────
 
-function loadExistingCrawlOutput(): SamplePage[] {
-  const crawlDir = path.join(PROJECT_ROOT, "crawl-output");
-  if (!fs.existsSync(crawlDir)) return [];
+interface SitePaths {
+  siteDir: string;        // output/<slug>/
+  crawlOutputDir: string; // output/<slug>/crawl-output/
+  reportsDir: string;     // output/<slug>/reports/
+  configPath: string;     // output/<slug>/site-config.yaml
+}
 
-  const files = fs.readdirSync(crawlDir).filter((f) => f.endsWith(".json"));
-  const pages: SamplePage[] = [];
-
-  for (const file of files) {
-    try {
-      const raw = JSON.parse(fs.readFileSync(path.join(crawlDir, file), "utf-8"));
-      if (raw.success && raw.markdown) {
-        pages.push({
-          url: raw.url,
-          url_path: raw.url_path,
-          slug: raw.slug,
-          markdown: raw.markdown,
-          markdown_length: raw.markdown_length || raw.markdown.length,
-        });
-      }
-    } catch {
-      // Skip invalid files
-    }
-  }
-
-  return pages;
+function computeSitePaths(siteUrl: string): SitePaths {
+  const slug = deriveSiteSlug(siteUrl);
+  const siteDir = path.join(OUTPUT_ROOT, slug);
+  return {
+    siteDir,
+    crawlOutputDir: path.join(siteDir, "crawl-output"),
+    reportsDir: path.join(siteDir, "reports"),
+    configPath: path.join(siteDir, "site-config.yaml"),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -287,26 +282,44 @@ async function main() {
 
   const startTime = Date.now();
 
+  // Compute output paths
+  const sitePaths = computeSitePaths(opts.url);
+  const siteSlug = deriveSiteSlug(opts.url);
+
   logInfo(`URL:     ${opts.url}`);
+  logInfo(`Site:    ${siteSlug}`);
   logInfo(`Sample:  ${opts.sample} pages`);
   logInfo(`Model:   ${opts.model || "(CLI default)"}`);
-  logInfo(`Output:  ${opts.output}`);
+  logInfo(`Output:  ${sitePaths.siteDir}`);
   if (opts.dryRun) logInfo("Mode:    DRY RUN");
+
+  // Create output directories
+  if (!opts.dryRun) {
+    fs.mkdirSync(sitePaths.crawlOutputDir, { recursive: true });
+    fs.mkdirSync(sitePaths.reportsDir, { recursive: true });
+  }
 
   // ── Phase 1: Sample crawl ──────────────────────────────────────────────
   logInfo("Phase 1: Crawling sample pages");
 
   let pages: SamplePage[];
   if (opts.skipCrawl) {
-    logInfo("Skipping crawl — loading existing crawl-output/ files...");
-    pages = loadExistingCrawlOutput();
+    logInfo(`Skipping crawl — loading existing files from ${sitePaths.crawlOutputDir}`);
+    pages = loadCrawlOutput(sitePaths.crawlOutputDir);
     if (pages.length === 0) {
-      logError("ERR004: No crawl output found. Run without --skip-crawl first.");
-      process.exit(1);
+      // Fall back to legacy crawl-output/ at project root
+      const legacyCrawlDir = path.join(PROJECT_ROOT, "crawl-output");
+      pages = loadCrawlOutput(legacyCrawlDir);
+      if (pages.length > 0) {
+        logWarning(`No files in ${sitePaths.crawlOutputDir}, loaded ${pages.length} from legacy crawl-output/`);
+      } else {
+        logError("ERR004: No crawl output found. Run without --skip-crawl first.");
+        process.exit(1);
+      }
     }
-    logInfo(`Loaded ${pages.length} pages from crawl-output/`);
+    logInfo(`Loaded ${pages.length} pages`);
   } else {
-    pages = await samplePages(opts.url, opts.sample, PROJECT_ROOT);
+    pages = await samplePages(opts.url, opts.sample, PROJECT_ROOT, sitePaths.crawlOutputDir, sitePaths.reportsDir);
   }
 
   // Select diverse sample for analysis (up to opts.sample)
@@ -394,21 +407,20 @@ async function main() {
     logInfo("DRY RUN — would write the following config:");
     console.log(finalYaml);
   } else {
-    fs.writeFileSync(opts.output, finalYaml, "utf-8");
-    if (!fs.existsSync(opts.output)) {
+    fs.writeFileSync(sitePaths.configPath, finalYaml, "utf-8");
+    if (!fs.existsSync(sitePaths.configPath)) {
       logError("ERR005: Failed to write config file");
       process.exit(1);
     }
-    logSuccess(`Written to: ${opts.output}`);
+    logSuccess(`Written to: ${sitePaths.configPath}`);
   }
 
   // Save analysis log
-  const reportsDir = path.join(PROJECT_ROOT, "reports");
-  fs.mkdirSync(reportsDir, { recursive: true });
-  const logPath = path.join(reportsDir, "analyse-log.json");
+  const logFilePath = path.join(sitePaths.reportsDir, "analyse-log.json");
   const log = {
     timestamp: new Date().toISOString(),
     url: opts.url,
+    siteSlug: siteSlug,
     model: modelLabel,
     sample_count: sample.length,
     discovered_types: discoveredTypes,
@@ -419,7 +431,9 @@ async function main() {
     cleanup_rules_count: cleanupRules.length,
     elapsed_ms: Date.now() - startTime,
   };
-  fs.writeFileSync(logPath, JSON.stringify(log, null, 2), "utf-8");
+  if (!opts.dryRun) {
+    fs.writeFileSync(logFilePath, JSON.stringify(log, null, 2), "utf-8");
+  }
 
   // Summary
   const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -439,14 +453,13 @@ async function main() {
   }
   logInfo(`Cleanup rules:  ${cleanupRules.length}`);
   logInfo(`Time:           ${elapsedSec}s`);
-  logInfo(`Analysis log:   ${logPath}`);
   if (!opts.dryRun) {
-    logInfo(`Config file:    ${opts.output}`);
+    logInfo(`Analysis log:   ${logFilePath}`);
+    logInfo(`Config file:    ${sitePaths.configPath}`);
     logInfo("Next steps:");
-    logInfo(`  1. Review ${opts.output} — adjust content types, prompts, cleanup rules`);
-    logInfo(`  2. Crawl the full site: cd crawl && python crawl_site.py --url ${opts.url}`);
-    logInfo(`  3. Extract content: npm run extract -- --config ${opts.output}`);
-    logInfo(`  4. Validate output: npm run validate -- --config ${opts.output}`);
+    logInfo(`  1. Review ${sitePaths.configPath}`);
+    logInfo(`  2. Extract: npx tsx scripts/orchestrator.ts --config ${sitePaths.configPath}`);
+    logInfo(`  3. Validate: npx tsx scripts/validate.ts --config ${sitePaths.configPath}`);
   }
 }
 

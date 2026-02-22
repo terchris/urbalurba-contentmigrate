@@ -52,14 +52,30 @@ const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_CONFIG_PATH = "./site-config.yaml";
 const DEFAULT_CONCURRENCY = 2;
 
-const PATHS = {
-  projectRoot: PROJECT_ROOT,
-  crawlOutput: path.join(PROJECT_ROOT, "crawl-output"),
-  crawlManifest: path.join(PROJECT_ROOT, "reports", "crawl-manifest.json"),
-  content: path.join(PROJECT_ROOT, "content"),
-  images: path.join(PROJECT_ROOT, "images"),
-  reports: path.join(PROJECT_ROOT, "reports"),
-} as const;
+/**
+ * Derive all working paths from the config file location.
+ *
+ * When config is at output/<slug>/site-config.yaml:
+ *   siteDir      = output/<slug>/
+ *   crawlOutput  = output/<slug>/crawl-output/
+ *   runDir       = output/<slug>/runs/YYYY-MM-DDTHH-MM/
+ *   content      = output/<slug>/runs/YYYY-MM-DDTHH-MM/content/
+ *   reports      = output/<slug>/runs/YYYY-MM-DDTHH-MM/reports/
+ */
+function computeRunPaths(configPath: string) {
+  const siteDir = path.dirname(path.resolve(configPath));
+  const timestamp = new Date().toISOString().replace(/:/g, "-").slice(0, 16); // YYYY-MM-DDTHH-MM
+  const runDir = path.join(siteDir, "runs", timestamp);
+
+  return {
+    projectRoot: PROJECT_ROOT,
+    siteDir,
+    crawlOutput: path.join(siteDir, "crawl-output"),
+    runDir,
+    content: path.join(runDir, "content"),
+    reports: path.join(runDir, "reports"),
+  };
+}
 
 const ERROR_PAGE_MARKERS = [
   "page not found",
@@ -112,10 +128,15 @@ Options:
   --dry-run          Show what would be processed without extracting
   -h, --help         Show this help message
 
+Output:
+  Creates a timestamped run folder: output/<slug>/runs/YYYY-MM-DDTHH-MM/
+  Content files:   output/<slug>/runs/<timestamp>/content/<type>/<slug>.md
+  Extraction log:  output/<slug>/runs/<timestamp>/reports/extraction-log.json
+
 Prerequisites:
   - Ollama must be running (ollama serve)
   - Required model must be pulled (e.g. ollama pull gemma3:4b)
-  - Crawl output must exist in crawl-output/
+  - Crawl output must exist in output/<slug>/crawl-output/
 
 Metadata:
   ID:       ${SCRIPT_ID}
@@ -212,8 +233,8 @@ function formatNumber(n: number): string {
 // HELPER: load crawl pages
 // ─────────────────────────────────────────────────────────────────────────────
 
-function loadCrawlPages(): CrawlPage[] {
-  const crawlDir = PATHS.crawlOutput;
+function loadCrawlPages(crawlOutputDir: string): CrawlPage[] {
+  const crawlDir = crawlOutputDir;
   if (!fs.existsSync(crawlDir)) {
     logError(`ERR001: Crawl output not found: ${crawlDir}`);
     logInfo("Run the crawl first: cd crawl && python crawl_site.py");
@@ -351,6 +372,9 @@ async function main() {
     process.exit(1);
   }
 
+  // Compute paths from config file location
+  const PATHS = computeRunPaths(configPath);
+
   // Build extraction context for the LLM client
   const typesWithExtras = site.config.content_types
     .filter((ct) => ct.schema.extras && Object.keys(ct.schema.extras).length > 0)
@@ -367,13 +391,14 @@ async function main() {
     cleanBody: site.cleanBody,
   };
 
-  logInfo(`Config: ${configPath}`);
-  logInfo(`Site:   ${site.siteUrl}`);
-  logInfo(`Model:  ${site.llm.extractionModel}`);
+  logInfo(`Config:  ${configPath}`);
+  logInfo(`Site:    ${site.siteUrl}`);
+  logInfo(`Model:   ${site.llm.extractionModel}`);
+  logInfo(`Run dir: ${PATHS.runDir}`);
 
   // Load Crawl4AI pages
   logInfo(`Loading crawl output from: ${PATHS.crawlOutput}`);
-  let pages = loadCrawlPages();
+  let pages = loadCrawlPages(PATHS.crawlOutput);
   logInfo(`Found ${pages.length} crawled pages`);
 
   // Filter HTTP duplicates

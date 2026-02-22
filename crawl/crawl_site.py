@@ -45,8 +45,8 @@ from crawl4ai.content_filter_strategy import PruningContentFilter
 # ---------------------------------------------------------------------------
 
 DEFAULT_URL = "https://www.smartebyernorge.no"
-OUTPUT_DIR = Path(__file__).parent.parent / "crawl-output"
-REPORTS_DIR = Path(__file__).parent.parent / "reports"
+DEFAULT_OUTPUT_DIR = Path(__file__).parent.parent / "crawl-output"
+DEFAULT_REPORTS_DIR = Path(__file__).parent.parent / "reports"
 
 # Pages to skip (common non-content patterns)
 SKIP_PATTERNS = [
@@ -194,10 +194,10 @@ async def discover_pages(crawler, base_url: str, config: CrawlerRunConfig, limit
 # Extraction: crawl each page and save results
 # ---------------------------------------------------------------------------
 
-async def extract_pages(crawler, pages: list[str], base_url: str, config: CrawlerRunConfig) -> list[dict]:
+async def extract_pages(crawler, pages: list[str], base_url: str, config: CrawlerRunConfig, output_dir: Path = DEFAULT_OUTPUT_DIR) -> list[dict]:
     """Crawl each discovered page and save clean Markdown + metadata."""
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     results = []
     total = len(pages)
 
@@ -252,7 +252,7 @@ async def extract_pages(crawler, pages: list[str], base_url: str, config: Crawle
             }
 
             # Save per-page JSON
-            output_path = OUTPUT_DIR / f"{slug}.json"
+            output_path = output_dir / f"{slug}.json"
             with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(page_data, f, ensure_ascii=False, indent=2)
 
@@ -264,7 +264,7 @@ async def extract_pages(crawler, pages: list[str], base_url: str, config: Crawle
                 "elapsed_seconds": elapsed,
                 "markdown_length": len(raw_md),
                 "images": len(meta["images"]),
-                "output_file": str(output_path.relative_to(OUTPUT_DIR.parent)),
+                "output_file": str(output_path.relative_to(output_dir.parent)),
             })
 
         except Exception as e:
@@ -288,7 +288,12 @@ async def main():
     parser.add_argument("--url", default=DEFAULT_URL, help="Base URL to crawl")
     parser.add_argument("--limit", type=int, default=None, help="Max pages to crawl (for testing)")
     parser.add_argument("--local", type=str, default=None, help="Path to local wget mirror (use file:// instead of live)")
+    parser.add_argument("--output-dir", type=str, default=None, help="Output directory for crawl JSON files")
+    parser.add_argument("--reports-dir", type=str, default=None, help="Reports directory for crawl manifest")
     args = parser.parse_args()
+
+    output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_OUTPUT_DIR
+    reports_dir = Path(args.reports_dir) if args.reports_dir else DEFAULT_REPORTS_DIR
 
     base_url = args.url
     if args.local:
@@ -336,11 +341,11 @@ async def main():
             sys.exit(1)
 
         # Phase 2: Extract each page
-        results = await extract_pages(crawler, pages, base_url, crawl_config)
+        results = await extract_pages(crawler, pages, base_url, crawl_config, output_dir)
 
     # Write manifest
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    manifest_path = REPORTS_DIR / "crawl-manifest.json"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = reports_dir / "crawl-manifest.json"
 
     success_count = sum(1 for r in results if r.get("success"))
     fail_count = sum(1 for r in results if not r.get("success"))
@@ -362,7 +367,7 @@ async def main():
     print(f"  Crawl complete!")
     print(f"  ✅ Success: {success_count}/{len(results)}")
     print(f"  ❌ Failed:  {fail_count}/{len(results)}")
-    print(f"  📂 Output:  {OUTPUT_DIR}")
+    print(f"  📂 Output:  {output_dir}")
     print(f"  📄 Manifest: {manifest_path}")
     print(f"{'=' * 60}\n")
 

@@ -13,5 +13,5 @@ export {
   type GeneratedFieldDefinition,
   type GeneratedCleanupRule,
 } from "./generate-config.js";
-export { assembleConfig, type AssembledConfig } from "./assemble-config.js";
+export { assembleConfig, deriveSiteName, deriveSiteSlug, type AssembledConfig } from "./assemble-config.js";
 export { callClaude, type ClaudeCliOptions, type ClaudeCliResult } from "./claude-cli.js";

@@ -4,8 +4,8 @@
  * Phase 1 of the analyse command: crawl a diverse sample of pages
  * from the target website using the Python Crawl4AI crawler.
  *
- * Invokes crawl/crawl_site.py with --limit N, then reads the
- * resulting JSON files from crawl-output/.
+ * Invokes crawl/crawl_site.py with --limit N and --output-dir,
+ * then reads the resulting JSON files.
  */
 
 import fs from "node:fs";
@@ -37,15 +37,18 @@ export interface SamplePage {
  * @param siteUrl - Base URL to crawl (e.g. "https://www.example.com")
  * @param sampleSize - Number of pages to sample
  * @param projectRoot - Path to project root directory
+ * @param crawlOutputDir - Directory to write crawl JSON files to
+ * @param reportsDir - Directory to write crawl reports to
  * @returns Array of sample pages with markdown content
  */
 export async function samplePages(
   siteUrl: string,
   sampleSize: number,
-  projectRoot: string
+  projectRoot: string,
+  crawlOutputDir: string,
+  reportsDir: string
 ): Promise<SamplePage[]> {
   const crawlScript = path.join(projectRoot, "crawl", "crawl_site.py");
-  const crawlOutputDir = path.join(projectRoot, "crawl-output");
 
   // Check that crawl_site.py exists
   if (!fs.existsSync(crawlScript)) {
@@ -66,6 +69,7 @@ export async function samplePages(
 
   // Run the Python crawler
   console.log(`  Crawling ${siteUrl} (sample: ${sampleSize} pages)...`);
+  console.log(`  Output: ${crawlOutputDir}`);
   console.log(`  This may take a few minutes...\n`);
 
   // Find Python executable: prefer venv, fall back to python3
@@ -73,7 +77,16 @@ export async function samplePages(
   const pythonExe = fs.existsSync(venvPython) ? venvPython : "python3";
 
   try {
-    execSync(`"${pythonExe}" "${crawlScript}" --url "${siteUrl}" --limit ${sampleSize}`, {
+    const cmd = [
+      `"${pythonExe}"`,
+      `"${crawlScript}"`,
+      `--url "${siteUrl}"`,
+      `--limit ${sampleSize}`,
+      `--output-dir "${crawlOutputDir}"`,
+      `--reports-dir "${reportsDir}"`,
+    ].join(" ");
+
+    execSync(cmd, {
       cwd: projectRoot,
       stdio: "inherit",
       timeout: 300_000, // 5 minute timeout
