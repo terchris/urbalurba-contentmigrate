@@ -138,6 +138,10 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
+# Devcontainer secrets (NEVER commit)
+.devcontainer.secrets
+.devcontainer.secrets/
+
 # Content migration output (generated, not checked in)
 crawl-output/
 content/
