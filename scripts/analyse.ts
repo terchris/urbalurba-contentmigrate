@@ -8,55 +8,145 @@
  * Two-tier LLM economics: spend ~$2-5 once on Claude to generate all
  * configuration, then spend ~$0 on Ollama to extract hundreds of pages.
  *
- * Usage:
- *   npm run analyse -- --url https://www.example.com
+ * Uses the Claude Code CLI (`claude --print`) with the user's Max/Pro
+ * subscription — no ANTHROPIC_API_KEY needed.
  *
- * Options:
- *   --url URL           Site URL to analyse (required)
- *   --sample N          Number of sample pages to crawl (default: 30)
- *   --output PATH       Output config file path (default: ./site-config.yaml)
- *   --model MODEL       Claude model to use (default: claude-sonnet-4-20250514)
- *   --dry-run           Show what would be generated without writing files
- *   --skip-crawl        Skip crawling, reuse existing crawl-output/ files
+ * Usage:
+ *   npx tsx scripts/analyse.ts --url https://www.example.com [options]
+ *
+ * Follow the standard: docs/ai-developer/rules/script-standard.md
+ * TypeScript specifics: docs/ai-developer/rules/typescript.md
  */
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IMPORTS
+// ─────────────────────────────────────────────────────────────────────────────
 
 import fs from "node:fs";
 import path from "node:path";
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import Anthropic from "@anthropic-ai/sdk";
 import { stringify as yamlStringify } from "yaml";
 import { samplePages, type SamplePage } from "../src/analyse/sample-crawler.js";
-import { discoverContentTypes, type DiscoveredType } from "../src/analyse/discover-types.js";
+import { discoverContentTypes } from "../src/analyse/discover-types.js";
 import {
   generateSchemaAndPrompt,
   generateCleanupRules,
   type GeneratedTypeConfig,
-  type GeneratedCleanupRule,
 } from "../src/analyse/generate-config.js";
 import { assembleConfig } from "../src/analyse/assemble-config.js";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SCRIPT METADATA
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SCRIPT_ID = "analyse";
+const SCRIPT_NAME = "Analyse Site";
+const SCRIPT_VER = "0.1.0";
+const SCRIPT_DESCRIPTION = "Analyse a website and generate site-config.yaml for content migration.";
+const SCRIPT_CATEGORY = "MIGRATION";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIGURATION
+// ─────────────────────────────────────────────────────────────────────────────
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "..");
+const DEFAULT_SAMPLE_SIZE = 30;
+const DEFAULT_OUTPUT = "./site-config.yaml";
+const MAX_PAGES_FOR_CLEANUP = 5;
+const MAX_PAGES_PER_TYPE = 3;
 
-// ---------------------------------------------------------------------------
-// CLI args
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// LOGGING
+// ─────────────────────────────────────────────────────────────────────────────
+
+function logTime(): string {
+  return new Date().toLocaleTimeString("en-GB", { hour12: false });
+}
+function logInfo(msg: string): void {
+  console.error(`[${logTime()}] INFO  ${msg}`);
+}
+function logSuccess(msg: string): void {
+  console.error(`[${logTime()}] OK    ${msg}`);
+}
+function logError(msg: string): void {
+  console.error(`[${logTime()}] ERROR ${msg}`);
+}
+function logWarning(msg: string): void {
+  console.error(`[${logTime()}] WARN  ${msg}`);
+}
+function logStart(): void {
+  logInfo(`Starting: ${SCRIPT_NAME} Ver: ${SCRIPT_VER}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELP
+// ─────────────────────────────────────────────────────────────────────────────
+
+function showHelp(): void {
+  const text = `
+${SCRIPT_NAME} (v${SCRIPT_VER})
+${SCRIPT_DESCRIPTION}
+
+Usage:
+  npx tsx scripts/${SCRIPT_ID}.ts --url <URL> [options]
+
+Options:
+  --url URL           Site URL to analyse (required)
+  --sample N          Number of sample pages to crawl (default: ${DEFAULT_SAMPLE_SIZE})
+  --output PATH       Output config file path (default: ${DEFAULT_OUTPUT})
+  --model MODEL       Claude model to use (optional, uses CLI default)
+  --dry-run           Show what would be generated without writing files
+  --skip-crawl        Skip crawling, reuse existing crawl-output/ files
+  -h, --help          Show this help message
+
+Prerequisites:
+  - Claude Code CLI (claude) must be installed and authenticated
+  - Python 3.10+ with crawl4ai (pip install crawl4ai) unless using --skip-crawl
+
+Examples:
+  npx tsx scripts/analyse.ts --url https://www.example.com
+  npx tsx scripts/analyse.ts --url https://www.example.com --sample 50 --dry-run
+  npx tsx scripts/analyse.ts --url https://www.example.com --skip-crawl
+
+Metadata:
+  ID:       ${SCRIPT_ID}
+  Category: ${SCRIPT_CATEGORY}
+`.trim();
+  console.error(text);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface AnalyseArgs {
   url: string;
   sample: number;
   output: string;
-  model: string;
+  model?: string;
   dryRun: boolean;
   skipCrawl: boolean;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ARGUMENT PARSING
+// ─────────────────────────────────────────────────────────────────────────────
+
 function parseArgs(): AnalyseArgs {
   const args = process.argv.slice(2);
+
+  // Check for help flag first
+  if (args.includes("-h") || args.includes("--help")) {
+    showHelp();
+    process.exit(0);
+  }
+
   let url = "";
-  let sample = 30;
-  let output = "./site-config.yaml";
-  let model = "claude-sonnet-4-20250514";
+  let sample = DEFAULT_SAMPLE_SIZE;
+  let output = DEFAULT_OUTPUT;
+  let model: string | undefined;
   let dryRun = false;
   let skipCrawl = false;
 
@@ -77,219 +167,49 @@ function parseArgs(): AnalyseArgs {
   }
 
   if (!url) {
-    console.error("❌ --url is required");
-    console.error("Usage: npm run analyse -- --url https://www.example.com [--sample 30]");
+    logError("ERR001: --url is required");
+    logInfo("Usage: npx tsx scripts/analyse.ts --url https://www.example.com [--sample 30]");
     process.exit(1);
   }
 
   return { url, sample, output, model, dryRun, skipCrawl };
 }
 
-// ---------------------------------------------------------------------------
-// Claude client helper
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: command checks
+// ─────────────────────────────────────────────────────────────────────────────
 
-function getClaudeClient(): Anthropic {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    console.error("❌ ANTHROPIC_API_KEY environment variable is required");
-    console.error("   Set it with: export ANTHROPIC_API_KEY=sk-ant-...");
+function commandExists(cmd: string): boolean {
+  try {
+    execSync(`command -v ${cmd}`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function checkPrerequisites(skipCrawl: boolean): void {
+  // Claude CLI is always required
+  if (!commandExists("claude")) {
+    logError("ERR002: Claude Code CLI (claude) is required but not found");
+    logInfo("Install it from: https://docs.anthropic.com/en/docs/claude-code");
     process.exit(1);
   }
-  return new Anthropic({ apiKey });
-}
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-
-async function main() {
-  const opts = parseArgs();
-  const startTime = Date.now();
-
-  console.log("=".repeat(60));
-  console.log("  Content Migration — Site Analysis");
-  console.log("=".repeat(60));
-  console.log(`  URL:     ${opts.url}`);
-  console.log(`  Sample:  ${opts.sample} pages`);
-  console.log(`  Model:   ${opts.model}`);
-  console.log(`  Output:  ${opts.output}`);
-  if (opts.dryRun) console.log(`  Mode:    DRY RUN`);
-  console.log("");
-
-  // ── Phase 1: Sample crawl ──────────────────────────────────────────────
-  console.log("─".repeat(60));
-  console.log("  Phase 1: Crawling sample pages");
-  console.log("─".repeat(60));
-
-  let pages: SamplePage[];
-  if (opts.skipCrawl) {
-    console.log("  Skipping crawl — loading existing crawl-output/ files...");
-    pages = loadExistingCrawlOutput();
-    if (pages.length === 0) {
-      console.error("  ❌ No crawl output found. Run without --skip-crawl first.");
+  // Python + crawl4ai only needed if crawling
+  if (!skipCrawl) {
+    const venvPython = path.join(PROJECT_ROOT, "crawl", ".venv", "bin", "python3");
+    if (!fs.existsSync(venvPython) && !commandExists("python3")) {
+      logError("ERR003: python3 is required for crawling but not found");
+      logInfo("Install Python 3.10+ or use --skip-crawl with existing crawl-output/");
       process.exit(1);
     }
-    console.log(`  Loaded ${pages.length} pages from crawl-output/`);
-  } else {
-    pages = await samplePages(opts.url, opts.sample, PROJECT_ROOT);
   }
-
-  // Select diverse sample for analysis (up to opts.sample)
-  const sample = selectDiverseSample(pages, opts.sample);
-  console.log(`  Selected ${sample.length} diverse pages for analysis\n`);
-
-  // ── Phase 2: Discover content types ────────────────────────────────────
-  console.log("─".repeat(60));
-  console.log("  Phase 2: Discovering content types");
-  console.log("─".repeat(60));
-
-  const client = getClaudeClient();
-  const discoveredTypes = await discoverContentTypes(client, opts.model, opts.url, sample);
-  console.log(`  Found ${discoveredTypes.length} content types:`);
-  for (const dt of discoveredTypes) {
-    console.log(`    • ${dt.name} (${dt.representative_urls.length} representative pages)`);
-  }
-  console.log("");
-
-  // ── Phase 3: Generate schemas and prompts ──────────────────────────────
-  console.log("─".repeat(60));
-  console.log("  Phase 3: Generating schemas and extraction prompts");
-  console.log("─".repeat(60));
-
-  const typeConfigs: GeneratedTypeConfig[] = [];
-  for (const dt of discoveredTypes) {
-    console.log(`  Generating config for "${dt.name}"...`);
-    const representativePages = sample.filter((p) =>
-      dt.representative_urls.some((url) => p.url_path === url || p.url.includes(url))
-    );
-
-    // If no exact matches, try partial matching by URL patterns
-    const pagesForType =
-      representativePages.length > 0
-        ? representativePages
-        : sample.filter((p) =>
-            dt.url_patterns.some((pattern) => {
-              try {
-                return new RegExp(pattern).test(p.url_path);
-              } catch {
-                return p.url_path.includes(pattern.replace(/[\\^$]/g, ""));
-              }
-            })
-          );
-
-    const pagesToSend = pagesForType.slice(0, 3);
-    if (pagesToSend.length === 0) {
-      console.log(`    ⚠️  No representative pages found, using first sample page`);
-      pagesToSend.push(sample[0]);
-    }
-
-    const config = await generateSchemaAndPrompt(client, opts.model, opts.url, dt, pagesToSend);
-    typeConfigs.push(config);
-    console.log(`    ✅ ${dt.name}: ${Object.keys(config.extras).length} extra fields`);
-  }
-
-  // Generate cleanup rules
-  console.log("\n  Generating cleanup rules...");
-  const cleanupPages = sample.slice(0, 5);
-  const cleanupRules = await generateCleanupRules(client, opts.model, opts.url, cleanupPages);
-  console.log(`    ✅ ${cleanupRules.length} cleanup patterns\n`);
-
-  // ── Phase 4: Assemble and write config ─────────────────────────────────
-  console.log("─".repeat(60));
-  console.log("  Phase 4: Assembling site-config.yaml");
-  console.log("─".repeat(60));
-
-  const siteConfig = assembleConfig(opts.url, discoveredTypes, typeConfigs, cleanupRules, opts.model);
-  const yamlContent = yamlStringify(siteConfig, {
-    lineWidth: 120,
-    defaultKeyType: "PLAIN",
-    defaultStringType: "PLAIN",
-  });
-
-  // Prepend comment header
-  const siteName = siteConfig.site.name;
-  const header = [
-    `# site-config.yaml — ${siteName}`,
-    `#`,
-    `# Auto-generated by: contentmigrate analyse --url ${opts.url}`,
-    `# Generated at: ${new Date().toISOString()}`,
-    `# Model: ${opts.model}`,
-    `#`,
-    `# Review this file before running extraction.`,
-    `# See docs for format: https://github.com/urbalurba/contentmigrate`,
-    ``,
-  ].join("\n");
-
-  const finalYaml = header + yamlContent;
-
-  if (opts.dryRun) {
-    console.log("\n  DRY RUN — would write the following config:\n");
-    console.log("─".repeat(60));
-    console.log(finalYaml);
-    console.log("─".repeat(60));
-  } else {
-    fs.writeFileSync(opts.output, finalYaml, "utf-8");
-    console.log(`  ✅ Written to: ${opts.output}`);
-  }
-
-  // Save analysis log
-  const reportsDir = path.join(PROJECT_ROOT, "reports");
-  fs.mkdirSync(reportsDir, { recursive: true });
-  const logPath = path.join(reportsDir, "analyse-log.json");
-  const log = {
-    timestamp: new Date().toISOString(),
-    url: opts.url,
-    model: opts.model,
-    sample_count: sample.length,
-    discovered_types: discoveredTypes,
-    type_configs: typeConfigs.map((tc) => ({
-      name: tc.name,
-      extras_count: Object.keys(tc.extras).length,
-    })),
-    cleanup_rules_count: cleanupRules.length,
-    elapsed_ms: Date.now() - startTime,
-  };
-  fs.writeFileSync(logPath, JSON.stringify(log, null, 2), "utf-8");
-
-  // Summary
-  const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
-  console.log("");
-  console.log("=".repeat(60));
-  console.log("  Analysis complete!");
-  console.log("=".repeat(60));
-  console.log(`  Content types:  ${discoveredTypes.length}`);
-  for (const dt of discoveredTypes) {
-    const pages = sample.filter((p) =>
-      dt.url_patterns.some((pattern) => {
-        try {
-          return new RegExp(pattern).test(p.url_path);
-        } catch {
-          return false;
-        }
-      })
-    );
-    console.log(`    • ${dt.name.padEnd(20)} ${pages.length} pages matched`);
-  }
-  console.log(`  Cleanup rules:  ${cleanupRules.length}`);
-  console.log(`  Time:           ${elapsedSec}s`);
-  console.log(`  Analysis log:   ${logPath}`);
-  if (!opts.dryRun) {
-    console.log(`  Config file:    ${opts.output}`);
-    console.log("");
-    console.log("  Next steps:");
-    console.log(`    1. Review ${opts.output} — adjust content types, prompts, cleanup rules`);
-    console.log(`    2. Crawl the full site: cd crawl && python crawl_site.py --url ${opts.url}`);
-    console.log(`    3. Extract content: npm run extract -- --config ${opts.output}`);
-    console.log(`    4. Validate output: npm run validate -- --config ${opts.output}`);
-  }
-  console.log("=".repeat(60));
-  console.log("");
 }
 
-// ---------------------------------------------------------------------------
-// Helper: load existing crawl output
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: load existing crawl output
+// ─────────────────────────────────────────────────────────────────────────────
 
 function loadExistingCrawlOutput(): SamplePage[] {
   const crawlDir = path.join(PROJECT_ROOT, "crawl-output");
@@ -318,9 +238,9 @@ function loadExistingCrawlOutput(): SamplePage[] {
   return pages;
 }
 
-// ---------------------------------------------------------------------------
-// Helper: select diverse sample (group by URL depth/pattern, pick from each)
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: select diverse sample (group by URL depth/pattern, pick from each)
+// ─────────────────────────────────────────────────────────────────────────────
 
 function selectDiverseSample(pages: SamplePage[], maxCount: number): SamplePage[] {
   if (pages.length <= maxCount) return pages;
@@ -354,7 +274,186 @@ function selectDiverseSample(pages: SamplePage[], maxCount: number): SamplePage[
   return selected;
 }
 
-// Only run main() when executed directly (not when imported for testing)
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function main() {
+  const opts = parseArgs();
+  logStart();
+
+  // Check prerequisites before doing any work
+  checkPrerequisites(opts.skipCrawl);
+
+  const startTime = Date.now();
+
+  logInfo(`URL:     ${opts.url}`);
+  logInfo(`Sample:  ${opts.sample} pages`);
+  logInfo(`Model:   ${opts.model || "(CLI default)"}`);
+  logInfo(`Output:  ${opts.output}`);
+  if (opts.dryRun) logInfo("Mode:    DRY RUN");
+
+  // ── Phase 1: Sample crawl ──────────────────────────────────────────────
+  logInfo("Phase 1: Crawling sample pages");
+
+  let pages: SamplePage[];
+  if (opts.skipCrawl) {
+    logInfo("Skipping crawl — loading existing crawl-output/ files...");
+    pages = loadExistingCrawlOutput();
+    if (pages.length === 0) {
+      logError("ERR004: No crawl output found. Run without --skip-crawl first.");
+      process.exit(1);
+    }
+    logInfo(`Loaded ${pages.length} pages from crawl-output/`);
+  } else {
+    pages = await samplePages(opts.url, opts.sample, PROJECT_ROOT);
+  }
+
+  // Select diverse sample for analysis (up to opts.sample)
+  const sample = selectDiverseSample(pages, opts.sample);
+  logInfo(`Selected ${sample.length} diverse pages for analysis`);
+
+  // ── Phase 2: Discover content types ────────────────────────────────────
+  logInfo("Phase 2: Discovering content types");
+
+  const discoveredTypes = discoverContentTypes(opts.url, sample, opts.model);
+  logSuccess(`Found ${discoveredTypes.length} content types`);
+  for (const dt of discoveredTypes) {
+    logInfo(`  ${dt.name} (${dt.representative_urls.length} representative pages)`);
+  }
+
+  // ── Phase 3: Generate schemas and prompts ──────────────────────────────
+  logInfo("Phase 3: Generating schemas and extraction prompts");
+
+  const typeConfigs: GeneratedTypeConfig[] = [];
+  for (const dt of discoveredTypes) {
+    logInfo(`Generating config for "${dt.name}"...`);
+    const representativePages = sample.filter((p) =>
+      dt.representative_urls.some((url) => p.url_path === url || p.url.includes(url))
+    );
+
+    // If no exact matches, try partial matching by URL patterns
+    const pagesForType =
+      representativePages.length > 0
+        ? representativePages
+        : sample.filter((p) =>
+            dt.url_patterns.some((pattern) => {
+              try {
+                return new RegExp(pattern).test(p.url_path);
+              } catch {
+                return p.url_path.includes(pattern.replace(/[\\^$]/g, ""));
+              }
+            })
+          );
+
+    const pagesToSend = pagesForType.slice(0, MAX_PAGES_PER_TYPE);
+    if (pagesToSend.length === 0) {
+      logWarning(`No representative pages found for "${dt.name}", using first sample page`);
+      pagesToSend.push(sample[0]);
+    }
+
+    const config = generateSchemaAndPrompt(opts.url, dt, pagesToSend, opts.model);
+    typeConfigs.push(config);
+    logSuccess(`${dt.name}: ${Object.keys(config.extras).length} extra fields`);
+  }
+
+  // Generate cleanup rules
+  logInfo("Generating cleanup rules...");
+  const cleanupPages = sample.slice(0, MAX_PAGES_FOR_CLEANUP);
+  const cleanupRules = generateCleanupRules(opts.url, cleanupPages, opts.model);
+  logSuccess(`${cleanupRules.length} cleanup patterns`);
+
+  // ── Phase 4: Assemble and write config ─────────────────────────────────
+  logInfo("Phase 4: Assembling site-config.yaml");
+
+  const modelLabel = opts.model || "claude-cli-default";
+  const siteConfig = assembleConfig(opts.url, discoveredTypes, typeConfigs, cleanupRules, modelLabel);
+  const yamlContent = yamlStringify(siteConfig, {
+    lineWidth: 120,
+    defaultKeyType: "PLAIN",
+    defaultStringType: "PLAIN",
+  });
+
+  // Prepend comment header
+  const siteName = siteConfig.site.name;
+  const header = [
+    `# site-config.yaml — ${siteName}`,
+    `#`,
+    `# Auto-generated by: contentmigrate analyse --url ${opts.url}`,
+    `# Generated at: ${new Date().toISOString()}`,
+    `# Model: ${modelLabel}`,
+    `#`,
+    `# Review this file before running extraction.`,
+    `# See docs for format: https://github.com/urbalurba/contentmigrate`,
+    ``,
+  ].join("\n");
+
+  const finalYaml = header + yamlContent;
+
+  if (opts.dryRun) {
+    logInfo("DRY RUN — would write the following config:");
+    console.log(finalYaml);
+  } else {
+    fs.writeFileSync(opts.output, finalYaml, "utf-8");
+    if (!fs.existsSync(opts.output)) {
+      logError("ERR005: Failed to write config file");
+      process.exit(1);
+    }
+    logSuccess(`Written to: ${opts.output}`);
+  }
+
+  // Save analysis log
+  const reportsDir = path.join(PROJECT_ROOT, "reports");
+  fs.mkdirSync(reportsDir, { recursive: true });
+  const logPath = path.join(reportsDir, "analyse-log.json");
+  const log = {
+    timestamp: new Date().toISOString(),
+    url: opts.url,
+    model: modelLabel,
+    sample_count: sample.length,
+    discovered_types: discoveredTypes,
+    type_configs: typeConfigs.map((tc) => ({
+      name: tc.name,
+      extras_count: Object.keys(tc.extras).length,
+    })),
+    cleanup_rules_count: cleanupRules.length,
+    elapsed_ms: Date.now() - startTime,
+  };
+  fs.writeFileSync(logPath, JSON.stringify(log, null, 2), "utf-8");
+
+  // Summary
+  const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+  logSuccess("Analysis complete!");
+  logInfo(`Content types:  ${discoveredTypes.length}`);
+  for (const dt of discoveredTypes) {
+    const matchedPages = sample.filter((p) =>
+      dt.url_patterns.some((pattern) => {
+        try {
+          return new RegExp(pattern).test(p.url_path);
+        } catch {
+          return false;
+        }
+      })
+    );
+    logInfo(`  ${dt.name.padEnd(20)} ${matchedPages.length} pages matched`);
+  }
+  logInfo(`Cleanup rules:  ${cleanupRules.length}`);
+  logInfo(`Time:           ${elapsedSec}s`);
+  logInfo(`Analysis log:   ${logPath}`);
+  if (!opts.dryRun) {
+    logInfo(`Config file:    ${opts.output}`);
+    logInfo("Next steps:");
+    logInfo(`  1. Review ${opts.output} — adjust content types, prompts, cleanup rules`);
+    logInfo(`  2. Crawl the full site: cd crawl && python crawl_site.py --url ${opts.url}`);
+    logInfo(`  3. Extract content: npm run extract -- --config ${opts.output}`);
+    logInfo(`  4. Validate output: npm run validate -- --config ${opts.output}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DIRECT RUN GUARD
+// ─────────────────────────────────────────────────────────────────────────────
+
 const isDirectRun =
   process.argv[1] &&
   (process.argv[1].endsWith("analyse.ts") ||
@@ -362,7 +461,7 @@ const isDirectRun =
 
 if (isDirectRun) {
   main().catch((err) => {
-    console.error("Unexpected error:", err);
+    logError(`Unexpected error: ${err}`);
     process.exit(1);
   });
 }

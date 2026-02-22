@@ -7,38 +7,40 @@
  *
  * Now config-driven: reads model name from site-config.yaml.
  *
- * Usage: npm run check-ollama -- --config site-config.smartebyernorge.yaml
+ * Usage:
+ *   npx tsx scripts/check-ollama.ts [--config site-config.yaml]
+ *
+ * Follow the standard: docs/ai-developer/rules/script-standard.md
+ * TypeScript specifics: docs/ai-developer/rules/typescript.md
  */
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IMPORTS
+// ─────────────────────────────────────────────────────────────────────────────
 
 import { Ollama } from "ollama";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { loadSiteConfig, createSiteConfigFacade } from "../src/config/index.js";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SCRIPT METADATA
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SCRIPT_ID = "check-ollama";
+const SCRIPT_NAME = "Check Ollama";
+const SCRIPT_VER = "0.1.0";
+const SCRIPT_DESCRIPTION = "Verify Ollama connection, model availability, and structured output.";
+const SCRIPT_CATEGORY = "MIGRATION";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIGURATION
+// ─────────────────────────────────────────────────────────────────────────────
+
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
-
-// ---------------------------------------------------------------------------
-// Test schema — a minimal extraction to verify structured output works
-// ---------------------------------------------------------------------------
-
-const TestExtractionSchema = z.object({
-  title: z.string().describe("The title of the page"),
-  language: z
-    .enum(["nb", "en"])
-    .describe("Language: nb for Norwegian bokmål, en for English"),
-  date_published: z
-    .string()
-    .describe("Publication date in ISO 8601 format, or empty string if unknown"),
-  summary: z
-    .string()
-    .describe("A one-sentence summary of the page content"),
-});
-
-type TestExtraction = z.infer<typeof TestExtractionSchema>;
-
-// ---------------------------------------------------------------------------
-// Sample content for testing
-// ---------------------------------------------------------------------------
+const DEFAULT_CONFIG_PATH = "./site-config.yaml";
+const DEFAULT_EXTRACTION_MODEL = "gemma3:4b";
+const DEFAULT_ANALYSIS_MODEL = "claude-sonnet-4-20250514";
 
 const SAMPLE_HTML = `
 <html>
@@ -55,13 +57,89 @@ const SAMPLE_HTML = `
 </html>
 `;
 
-// ---------------------------------------------------------------------------
-// CLI args
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// LOGGING
+// ─────────────────────────────────────────────────────────────────────────────
+
+function logTime(): string {
+  return new Date().toLocaleTimeString("en-GB", { hour12: false });
+}
+function logInfo(msg: string): void {
+  console.error(`[${logTime()}] INFO  ${msg}`);
+}
+function logSuccess(msg: string): void {
+  console.error(`[${logTime()}] OK    ${msg}`);
+}
+function logError(msg: string): void {
+  console.error(`[${logTime()}] ERROR ${msg}`);
+}
+function logWarning(msg: string): void {
+  console.error(`[${logTime()}] WARN  ${msg}`);
+}
+function logStart(): void {
+  logInfo(`Starting: ${SCRIPT_NAME} Ver: ${SCRIPT_VER}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELP
+// ─────────────────────────────────────────────────────────────────────────────
+
+function showHelp(): void {
+  const text = `
+${SCRIPT_NAME} (v${SCRIPT_VER})
+${SCRIPT_DESCRIPTION}
+
+Usage:
+  npx tsx scripts/${SCRIPT_ID}.ts [options]
+
+Options:
+  --config PATH  Path to site-config.yaml (default: ${DEFAULT_CONFIG_PATH})
+  -h, --help     Show this help message
+
+Prerequisites:
+  - Ollama must be running (ollama serve)
+  - Required model must be pulled (ollama pull gemma3:4b)
+
+Metadata:
+  ID:       ${SCRIPT_ID}
+  Category: ${SCRIPT_CATEGORY}
+`.trim();
+  console.error(text);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TestExtractionSchema = z.object({
+  title: z.string().describe("The title of the page"),
+  language: z
+    .enum(["nb", "en"])
+    .describe("Language: nb for Norwegian bokmål, en for English"),
+  date_published: z
+    .string()
+    .describe("Publication date in ISO 8601 format, or empty string if unknown"),
+  summary: z
+    .string()
+    .describe("A one-sentence summary of the page content"),
+});
+
+type TestExtraction = z.infer<typeof TestExtractionSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ARGUMENT PARSING
+// ─────────────────────────────────────────────────────────────────────────────
 
 function parseArgs(): { configPath: string } {
   const args = process.argv.slice(2);
-  let configPath = "./site-config.yaml";
+
+  // Check for help flag first
+  if (args.includes("-h") || args.includes("--help")) {
+    showHelp();
+    process.exit(0);
+  }
+
+  let configPath = DEFAULT_CONFIG_PATH;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--config" && args[i + 1]) {
@@ -72,30 +150,30 @@ function parseArgs(): { configPath: string } {
   return { configPath };
 }
 
-// ---------------------------------------------------------------------------
-// Check functions
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: check functions
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function checkConnection(ollama: Ollama): Promise<boolean> {
-  console.log(`\n🔌 Checking connection to Ollama at ${OLLAMA_HOST}...`);
+  logInfo(`Checking connection to Ollama at ${OLLAMA_HOST}...`);
   try {
     const response = await ollama.list();
-    console.log(`   ✅ Connected. ${response.models.length} model(s) available.`);
+    logSuccess(`Connected. ${response.models.length} model(s) available.`);
     return true;
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.error(`   ❌ Cannot connect to Ollama at ${OLLAMA_HOST}`);
-    console.error(`      Error: ${msg}`);
-    console.error(`\n   Troubleshooting:`);
-    console.error(`   1. Is Ollama running? Start it with: ollama serve`);
-    console.error(`   2. If inside a devcontainer, the host should be http://host.docker.internal:11434`);
-    console.error(`   3. If running locally, try: OLLAMA_HOST=http://localhost:11434 npm run check-ollama`);
+    logError(`ERR001: Cannot connect to Ollama at ${OLLAMA_HOST}`);
+    logError(`ERR001: ${msg}`);
+    logInfo("Troubleshooting:");
+    logInfo("  1. Is Ollama running? Start it with: ollama serve");
+    logInfo("  2. If inside a devcontainer, the host should be http://host.docker.internal:11434");
+    logInfo("  3. If running locally, try: OLLAMA_HOST=http://localhost:11434 npm run check-ollama");
     return false;
   }
 }
 
 async function checkModel(ollama: Ollama, modelName: string): Promise<boolean> {
-  console.log(`\n🤖 Checking for model: ${modelName}...`);
+  logInfo(`Checking for model: ${modelName}...`);
   try {
     const response = await ollama.list();
     const modelNames = response.models.map((m) => m.name);
@@ -113,28 +191,28 @@ async function checkModel(ollama: Ollama, modelName: string): Promise<boolean> {
           name === modelName ||
           name.startsWith(`${modelName.split(":")[0]}:`)
       );
-      console.log(`   ✅ Model found: ${match}`);
+      logSuccess(`Model found: ${match}`);
       return true;
     } else {
-      console.error(`   ❌ Model ${modelName} not found.`);
-      console.error(`\n   Available models:`);
+      logError(`ERR002: Model ${modelName} not found.`);
+      logInfo("Available models:");
       for (const name of modelNames) {
-        console.error(`     - ${name}`);
+        logInfo(`  - ${name}`);
       }
-      console.error(`\n   Install it with: ollama pull ${modelName}`);
+      logInfo(`Install it with: ollama pull ${modelName}`);
       return false;
     }
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.error(`   ❌ Failed to list models: ${msg}`);
+    logError(`ERR003: Failed to list models`);
+    logError(`ERR003: ${msg}`);
     return false;
   }
 }
 
 async function checkStructuredOutput(ollama: Ollama, modelName: string): Promise<boolean> {
-  console.log(`\n🧪 Testing structured extraction...`);
-  console.log(`   Model: ${modelName}`);
-  console.log(`   Schema: TestExtractionSchema (title, language, date, summary)`);
+  logInfo("Testing structured extraction...");
+  logInfo(`Model: ${modelName}`);
 
   try {
     const jsonSchema = zodToJsonSchema(TestExtractionSchema);
@@ -168,12 +246,12 @@ Extract dates in ISO 8601 format (YYYY-MM-DD).`,
       JSON.parse(rawContent)
     );
 
-    console.log(`   ✅ Structured output works! (${elapsed}ms)`);
-    console.log(`\n   Extracted data:`);
-    console.log(`     title:          "${parsed.title}"`);
-    console.log(`     language:       "${parsed.language}"`);
-    console.log(`     date_published: "${parsed.date_published}"`);
-    console.log(`     summary:        "${parsed.summary}"`);
+    logSuccess(`Structured output works! (${elapsed}ms)`);
+    logInfo("Extracted data:");
+    logInfo(`  title:          "${parsed.title}"`);
+    logInfo(`  language:       "${parsed.language}"`);
+    logInfo(`  date_published: "${parsed.date_published}"`);
+    logInfo(`  summary:        "${parsed.summary}"`);
 
     const issues: string[] = [];
     if (!parsed.title.toLowerCase().includes("nabolag")) {
@@ -187,55 +265,54 @@ Extract dates in ISO 8601 format (YYYY-MM-DD).`,
     }
 
     if (issues.length > 0) {
-      console.log(`\n   ⚠️  Quality warnings:`);
       for (const issue of issues) {
-        console.log(`     - ${issue}`);
+        logWarning(`Quality: ${issue}`);
       }
     } else {
-      console.log(`\n   ✅ Extraction quality looks good!`);
+      logSuccess("Extraction quality looks good!");
     }
 
     return true;
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.error(`   ❌ Structured output test failed: ${msg}`);
+    logError(`ERR004: Structured output test failed`);
+    logError(`ERR004: ${msg}`);
     if (msg.includes("format")) {
-      console.error(
-        `\n   Your Ollama version may not support structured outputs.`
-      );
-      console.error(`   Update Ollama: curl -fsSL https://ollama.com/install.sh | sh`);
+      logInfo("Your Ollama version may not support structured outputs.");
+      logInfo("Update Ollama: curl -fsSL https://ollama.com/install.sh | sh");
     }
     return false;
   }
 }
 
 function checkClaudeApiKey(analysisModel: string): boolean {
-  console.log(`\n🔑 Checking for ANTHROPIC_API_KEY...`);
+  logInfo("Checking for ANTHROPIC_API_KEY...");
   if (process.env.ANTHROPIC_API_KEY) {
     const key = process.env.ANTHROPIC_API_KEY;
     const masked = `${key.slice(0, 10)}...${key.slice(-4)}`;
-    console.log(`   ✅ API key found: ${masked}`);
-    console.log(`   Claude model: ${analysisModel}`);
+    logSuccess(`API key found: ${masked}`);
+    logInfo(`Claude model: ${analysisModel}`);
     return true;
   } else {
-    console.log(`   ⚠️  ANTHROPIC_API_KEY not set.`);
-    console.log(`   Claude tier will not be available for complex page extraction.`);
-    console.log(`   Set it with: export ANTHROPIC_API_KEY=sk-ant-...`);
+    logWarning("ANTHROPIC_API_KEY not set.");
+    logInfo("Claude tier will not be available for complex page extraction.");
+    logInfo("Set it with: export ANTHROPIC_API_KEY=sk-ant-...");
     return false;
   }
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function main() {
   const { configPath } = parseArgs();
+  logStart();
 
   // Load site config to get model name
   let siteName = "Content Migration";
-  let extractionModel = "gemma3:4b";
-  let analysisModel = "claude-sonnet-4-20250514";
+  let extractionModel = DEFAULT_EXTRACTION_MODEL;
+  let analysisModel = DEFAULT_ANALYSIS_MODEL;
 
   try {
     const config = await loadSiteConfig(configPath);
@@ -244,12 +321,10 @@ async function main() {
     extractionModel = site.llm.extractionModel;
     analysisModel = site.llm.analysisModel;
   } catch {
-    console.log(`   ⚠️  Could not load config from "${configPath}", using defaults.`);
+    logWarning(`Could not load config from "${configPath}", using defaults.`);
   }
 
-  console.log("=".repeat(60));
-  console.log(`  ${siteName} — Environment Check`);
-  console.log("=".repeat(60));
+  logInfo(`Site: ${siteName}`);
 
   const ollamaClient = new Ollama({ host: OLLAMA_HOST });
 
@@ -270,22 +345,30 @@ async function main() {
 
   const claudeReady = checkClaudeApiKey(analysisModel);
 
-  console.log(`\n${"=".repeat(60)}`);
-  console.log("  Summary:");
-  console.log(`  ✅ Ollama:  Connected, model ${extractionModel} ready, structured output works`);
-  console.log(`  ${claudeReady ? "✅" : "⚠️ "} Claude:  ${claudeReady ? "API key configured" : "API key not set (optional)"}`);
-  console.log(`${"=".repeat(60)}`);
-
+  // Summary
+  logSuccess(`Ollama: Connected, model ${extractionModel} ready, structured output works`);
   if (claudeReady) {
-    console.log("\n  🚀 Both tiers ready! Run: npm run extract -- --config site-config.yaml");
+    logSuccess("Claude: API key configured");
+    logInfo("Both tiers ready! Run: npm run extract -- --config site-config.yaml");
   } else {
-    console.log("\n  🚀 Ollama tier ready! Set ANTHROPIC_API_KEY for Claude tier.");
-    console.log("  You can still run: npm run extract -- --config site-config.yaml");
+    logWarning("Claude: API key not set (optional)");
+    logInfo("Ollama tier ready! Set ANTHROPIC_API_KEY for Claude tier.");
+    logInfo("You can still run: npm run extract -- --config site-config.yaml");
   }
-  console.log();
 }
 
-main().catch((err) => {
-  console.error("Unexpected error:", err);
-  process.exit(1);
-});
+// ─────────────────────────────────────────────────────────────────────────────
+// DIRECT RUN GUARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+const isDirectRun =
+  process.argv[1] &&
+  (process.argv[1].endsWith("check-ollama.ts") ||
+   process.argv[1].endsWith("check-ollama.js"));
+
+if (isDirectRun) {
+  main().catch((err) => {
+    logError(`Unexpected error: ${err}`);
+    process.exit(1);
+  });
+}

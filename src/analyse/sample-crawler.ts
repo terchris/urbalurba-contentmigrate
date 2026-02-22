@@ -68,8 +68,12 @@ export async function samplePages(
   console.log(`  Crawling ${siteUrl} (sample: ${sampleSize} pages)...`);
   console.log(`  This may take a few minutes...\n`);
 
+  // Find Python executable: prefer venv, fall back to python3
+  const venvPython = path.join(projectRoot, "crawl", ".venv", "bin", "python3");
+  const pythonExe = fs.existsSync(venvPython) ? venvPython : "python3";
+
   try {
-    execSync(`python3 "${crawlScript}" --url "${siteUrl}" --limit ${sampleSize}`, {
+    execSync(`"${pythonExe}" "${crawlScript}" --url "${siteUrl}" --limit ${sampleSize}`, {
       cwd: projectRoot,
       stdio: "inherit",
       timeout: 300_000, // 5 minute timeout

@@ -4,9 +4,12 @@
  * Phase 3 of the analyse command: for each discovered content type,
  * use Claude to generate the schema extras, extraction prompt, and
  * required fields. Also generates cleanup rules from boilerplate analysis.
+ *
+ * Uses the Claude Code CLI (`claude --print`) with the user's Max/Pro
+ * subscription — no ANTHROPIC_API_KEY needed.
  */
 
-import type Anthropic from "@anthropic-ai/sdk";
+import { callClaude } from "./claude-cli.js";
 import type { SamplePage } from "./sample-crawler.js";
 import type { DiscoveredType } from "./discover-types.js";
 
@@ -105,62 +108,57 @@ Rules for required_fields:
 }
 
 // ---------------------------------------------------------------------------
-// Tool schema for schema generation
+// JSON Schema for schema generation
 // ---------------------------------------------------------------------------
 
-const SCHEMA_TOOL = {
-  name: "save_type_config",
-  description:
-    "Save the generated schema extras, extraction prompt, and required fields for a content type.",
-  input_schema: {
-    type: "object" as const,
-    required: ["extras", "extraction_prompt", "required_fields"],
-    properties: {
-      extras: {
+const SCHEMA_JSON_SCHEMA = {
+  type: "object" as const,
+  required: ["extras", "extraction_prompt", "required_fields"],
+  properties: {
+    extras: {
+      type: "object" as const,
+      description:
+        "Extra fields beyond the base schema. Keys are field names (snake_case), values are field definitions.",
+      additionalProperties: {
         type: "object" as const,
-        description:
-          "Extra fields beyond the base schema. Keys are field names (snake_case), values are field definitions.",
-        additionalProperties: {
-          type: "object" as const,
-          required: ["type"],
-          properties: {
-            type: {
-              type: "string" as const,
-              enum: ["string", "number", "boolean", "string[]", "image", "object"],
-              description: "Field type",
-            },
-            description: {
-              type: "string" as const,
-              description: "Brief description of the field",
-            },
-            required: {
-              type: "boolean" as const,
-              description: "Whether this field is required",
-            },
-            items: {
+        required: ["type"],
+        properties: {
+          type: {
+            type: "string" as const,
+            enum: ["string", "number", "boolean", "string[]", "image", "object"],
+            description: "Field type",
+          },
+          description: {
+            type: "string" as const,
+            description: "Brief description of the field",
+          },
+          required: {
+            type: "boolean" as const,
+            description: "Whether this field is required",
+          },
+          items: {
+            type: "object" as const,
+            description:
+              "For object type: nested field definitions (creates array of objects)",
+            additionalProperties: {
               type: "object" as const,
-              description:
-                "For object type: nested field definitions (creates array of objects)",
-              additionalProperties: {
-                type: "object" as const,
-                properties: {
-                  type: { type: "string" as const },
-                  description: { type: "string" as const },
-                },
+              properties: {
+                type: { type: "string" as const },
+                description: { type: "string" as const },
               },
             },
           },
         },
       },
-      extraction_prompt: {
-        type: "string" as const,
-        description: "System prompt for the extraction LLM (under 500 words)",
-      },
-      required_fields: {
-        type: "array" as const,
-        items: { type: "string" as const },
-        description: "Fields that must be non-empty (always include 'title' and 'slug')",
-      },
+    },
+    extraction_prompt: {
+      type: "string" as const,
+      description: "System prompt for the extraction LLM (under 500 words)",
+    },
+    required_fields: {
+      type: "array" as const,
+      items: { type: "string" as const },
+      description: "Fields that must be non-empty (always include 'title' and 'slug')",
     },
   },
 };
@@ -172,50 +170,42 @@ const SCHEMA_TOOL = {
 /**
  * Generate schema extras, extraction prompt, and required fields for a content type.
  */
-export async function generateSchemaAndPrompt(
-  client: Anthropic,
-  model: string,
+export function generateSchemaAndPrompt(
   siteUrl: string,
   contentType: DiscoveredType,
-  representativePages: SamplePage[]
-): Promise<GeneratedTypeConfig> {
+  representativePages: SamplePage[],
+  model?: string,
+): GeneratedTypeConfig {
   const userPrompt = buildSchemaPrompt(siteUrl, contentType, representativePages);
 
-  const response = await client.messages.create({
-    model,
-    max_tokens: 4096,
-    system:
-      "You are a content extraction schema designer. Generate precise field definitions " +
-      "and extraction prompts for structured content migration.",
-    tools: [SCHEMA_TOOL as Anthropic.Tool],
-    tool_choice: { type: "tool" as const, name: "save_type_config" },
-    messages: [{ role: "user", content: userPrompt }],
-  });
-
-  const toolUse = response.content.find((block) => block.type === "tool_use");
-  if (!toolUse || toolUse.type !== "tool_use") {
-    throw new Error(`Claude did not return schema for content type "${contentType.name}"`);
-  }
-
-  const result = toolUse.input as {
+  const result = callClaude<{
     extras: Record<string, GeneratedFieldDefinition>;
     extraction_prompt: string;
     required_fields: string[];
-  };
+  }>({
+    prompt: userPrompt,
+    systemPrompt:
+      "You are a content extraction schema designer. Generate precise field definitions " +
+      "and extraction prompts for structured content migration.",
+    jsonSchema: SCHEMA_JSON_SCHEMA,
+    model,
+    maxBudget: 1,
+    timeout: 120_000,
+  });
 
   // Ensure title and slug are in required_fields
-  if (!result.required_fields.includes("title")) {
-    result.required_fields.unshift("title");
+  if (!result.data.required_fields.includes("title")) {
+    result.data.required_fields.unshift("title");
   }
-  if (!result.required_fields.includes("slug")) {
-    result.required_fields.splice(1, 0, "slug");
+  if (!result.data.required_fields.includes("slug")) {
+    result.data.required_fields.splice(1, 0, "slug");
   }
 
   return {
     name: contentType.name,
-    extras: result.extras,
-    extraction_prompt: result.extraction_prompt,
-    required_fields: result.required_fields,
+    extras: result.data.extras,
+    extraction_prompt: result.data.extraction_prompt,
+    required_fields: result.data.required_fields,
   };
 }
 
@@ -226,8 +216,13 @@ export async function generateSchemaAndPrompt(
 function buildCleanupPrompt(siteUrl: string, pages: SamplePage[]): string {
   const pageContent = pages
     .map((p) => {
-      // Show full content for boilerplate detection
-      return `=== PAGE: ${p.url_path} ===\n${p.markdown}\n`;
+      // Show first 1500 and last 1500 chars — boilerplate is at the top and bottom
+      const md = p.markdown;
+      const trimmed =
+        md.length <= 3000
+          ? md
+          : md.slice(0, 1500) + "\n\n[...content trimmed...]\n\n" + md.slice(-1500);
+      return `=== PAGE: ${p.url_path} ===\n${trimmed}\n`;
     })
     .join("\n");
 
@@ -266,32 +261,28 @@ Rules:
 - Order matters: list patterns from most specific to most general`;
 }
 
-const CLEANUP_TOOL = {
-  name: "save_cleanup_rules",
-  description: "Save the identified boilerplate cleanup rules.",
-  input_schema: {
-    type: "object" as const,
-    required: ["rules"],
-    properties: {
-      rules: {
-        type: "array" as const,
-        description: "List of cleanup rules",
-        items: {
-          type: "object" as const,
-          required: ["name", "regex", "flags"],
-          properties: {
-            name: {
-              type: "string" as const,
-              description: "Descriptive name in snake_case",
-            },
-            regex: {
-              type: "string" as const,
-              description: "Regex pattern to match boilerplate",
-            },
-            flags: {
-              type: "string" as const,
-              description: "Regex flags (e.g. 'gm', 'g', 'gms')",
-            },
+const CLEANUP_JSON_SCHEMA = {
+  type: "object" as const,
+  required: ["rules"],
+  properties: {
+    rules: {
+      type: "array" as const,
+      description: "List of cleanup rules",
+      items: {
+        type: "object" as const,
+        required: ["name", "regex", "flags"],
+        properties: {
+          name: {
+            type: "string" as const,
+            description: "Descriptive name in snake_case",
+          },
+          regex: {
+            type: "string" as const,
+            description: "Regex pattern to match boilerplate",
+          },
+          flags: {
+            type: "string" as const,
+            description: "Regex flags (e.g. 'gm', 'g', 'gms')",
           },
         },
       },
@@ -302,35 +293,27 @@ const CLEANUP_TOOL = {
 /**
  * Generate cleanup rules by analyzing boilerplate patterns across sample pages.
  */
-export async function generateCleanupRules(
-  client: Anthropic,
-  model: string,
+export function generateCleanupRules(
   siteUrl: string,
-  pages: SamplePage[]
-): Promise<GeneratedCleanupRule[]> {
+  pages: SamplePage[],
+  model?: string,
+): GeneratedCleanupRule[] {
   const userPrompt = buildCleanupPrompt(siteUrl, pages);
 
-  const response = await client.messages.create({
-    model,
-    max_tokens: 4096,
-    system:
+  const result = callClaude<{ rules: GeneratedCleanupRule[] }>({
+    prompt: userPrompt,
+    systemPrompt:
       "You are an expert at identifying and removing website boilerplate. " +
       "Generate precise regex patterns that match repeating non-content elements in Markdown.",
-    tools: [CLEANUP_TOOL as Anthropic.Tool],
-    tool_choice: { type: "tool" as const, name: "save_cleanup_rules" },
-    messages: [{ role: "user", content: userPrompt }],
+    jsonSchema: CLEANUP_JSON_SCHEMA,
+    model,
+    maxBudget: 2,
+    timeout: 300_000, // Cleanup analysis needs more time (large prompt)
   });
-
-  const toolUse = response.content.find((block) => block.type === "tool_use");
-  if (!toolUse || toolUse.type !== "tool_use") {
-    throw new Error("Claude did not return cleanup rules");
-  }
-
-  const result = toolUse.input as { rules: GeneratedCleanupRule[] };
 
   // Validate that regex patterns are valid
   const validRules: GeneratedCleanupRule[] = [];
-  for (const rule of result.rules) {
+  for (const rule of result.data.rules) {
     try {
       new RegExp(rule.regex, rule.flags);
       validRules.push(rule);

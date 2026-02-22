@@ -2,9 +2,10 @@
 
 The universal rules that apply to **all** scripts in this repo, regardless of language. Bash, PowerShell, and any future languages must follow these conventions.
 
-For language-specific syntax (how to implement these in bash or PowerShell), see the language rules files:
+For language-specific syntax (how to implement these in bash, PowerShell, or TypeScript), see the language rules files:
 - [bash.md](bash.md) — Bash scripts for macOS
 - [powershell.md](powershell.md) — PowerShell scripts for Windows
+- [typescript.md](typescript.md) — TypeScript CLI entry-point scripts
 
 ---
 

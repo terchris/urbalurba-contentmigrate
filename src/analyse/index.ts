@@ -14,3 +14,4 @@ export {
   type GeneratedCleanupRule,
 } from "./generate-config.js";
 export { assembleConfig, type AssembledConfig } from "./assemble-config.js";
+export { callClaude, type ClaudeCliOptions, type ClaudeCliResult } from "./claude-cli.js";

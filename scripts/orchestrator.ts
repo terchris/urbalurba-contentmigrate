@@ -16,14 +16,15 @@
  * reports/extraction-log.json separately from the content files.
  *
  * Usage:
- *   npm run extract -- --config site-config.smartebyernorge.yaml
+ *   npx tsx scripts/orchestrator.ts --config site-config.yaml [options]
  *
- * Options:
- *   --config PATH                # Path to site-config.yaml (default: ./site-config.yaml)
- *   --limit N                    # Process only N pages (for testing)
- *   --concurrency N              # Parallel requests (default: 2)
- *   --dry-run                    # Show what would be processed without extracting
+ * Follow the standard: docs/ai-developer/rules/script-standard.md
+ * TypeScript specifics: docs/ai-developer/rules/typescript.md
  */
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IMPORTS
+// ─────────────────────────────────────────────────────────────────────────────
 
 import fs from "node:fs";
 import path from "node:path";
@@ -32,12 +33,24 @@ import matter from "gray-matter";
 import { loadSiteConfig, createSiteConfigFacade, type SiteConfigFacade } from "../src/config/index.js";
 import { extractWithOllama, type ExtractionResult, type ExtractionContext } from "../lib/ollama-client.js";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SCRIPT METADATA
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SCRIPT_ID = "orchestrator";
+const SCRIPT_NAME = "Extract Content";
+const SCRIPT_VER = "0.1.0";
+const SCRIPT_DESCRIPTION = "Extract structured content from crawled pages using Ollama LLM.";
+const SCRIPT_CATEGORY = "MIGRATION";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIGURATION
+// ─────────────────────────────────────────────────────────────────────────────
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "..");
-
-// ---------------------------------------------------------------------------
-// Paths — all output is within this project directory
-// ---------------------------------------------------------------------------
+const DEFAULT_CONFIG_PATH = "./site-config.yaml";
+const DEFAULT_CONCURRENCY = 2;
 
 const PATHS = {
   projectRoot: PROJECT_ROOT,
@@ -48,9 +61,72 @@ const PATHS = {
   reports: path.join(PROJECT_ROOT, "reports"),
 } as const;
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+const ERROR_PAGE_MARKERS = [
+  "page not found",
+  "404",
+  "service unavailable",
+  "503 error",
+  "denne siden finnes ikke",
+  "finner ikke siden",
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOGGING
+// ─────────────────────────────────────────────────────────────────────────────
+
+function logTime(): string {
+  return new Date().toLocaleTimeString("en-GB", { hour12: false });
+}
+function logInfo(msg: string): void {
+  console.error(`[${logTime()}] INFO  ${msg}`);
+}
+function logSuccess(msg: string): void {
+  console.error(`[${logTime()}] OK    ${msg}`);
+}
+function logError(msg: string): void {
+  console.error(`[${logTime()}] ERROR ${msg}`);
+}
+function logWarning(msg: string): void {
+  console.error(`[${logTime()}] WARN  ${msg}`);
+}
+function logStart(): void {
+  logInfo(`Starting: ${SCRIPT_NAME} Ver: ${SCRIPT_VER}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELP
+// ─────────────────────────────────────────────────────────────────────────────
+
+function showHelp(): void {
+  const text = `
+${SCRIPT_NAME} (v${SCRIPT_VER})
+${SCRIPT_DESCRIPTION}
+
+Usage:
+  npx tsx scripts/${SCRIPT_ID}.ts [options]
+
+Options:
+  --config PATH      Path to site-config.yaml (default: ${DEFAULT_CONFIG_PATH})
+  --limit N          Process only N pages (for testing)
+  --concurrency N    Parallel requests (default: ${DEFAULT_CONCURRENCY})
+  --dry-run          Show what would be processed without extracting
+  -h, --help         Show this help message
+
+Prerequisites:
+  - Ollama must be running (ollama serve)
+  - Required model must be pulled (e.g. ollama pull gemma3:4b)
+  - Crawl output must exist in crawl-output/
+
+Metadata:
+  ID:       ${SCRIPT_ID}
+  Category: ${SCRIPT_CATEGORY}
+`.trim();
+  console.error(text);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface CrawlPage {
   url: string;
@@ -76,27 +152,9 @@ interface ExtractionLogEntry {
   timestamp: string;
 }
 
-// ---------------------------------------------------------------------------
-// Formatting helpers
-// ---------------------------------------------------------------------------
-
-function formatDuration(ms: number): string {
-  const totalSec = Math.floor(ms / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  if (h > 0) return `${h}h ${m}m ${s}s`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
-}
-
-function formatNumber(n: number): string {
-  return n.toLocaleString("en-US");
-}
-
-// ---------------------------------------------------------------------------
-// CLI args
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// ARGUMENT PARSING
+// ─────────────────────────────────────────────────────────────────────────────
 
 function parseArgs(): {
   configPath: string;
@@ -105,10 +163,17 @@ function parseArgs(): {
   concurrency: number;
 } {
   const args = process.argv.slice(2);
-  let configPath = "./site-config.yaml";
+
+  // Check for help flag first
+  if (args.includes("-h") || args.includes("--help")) {
+    showHelp();
+    process.exit(0);
+  }
+
+  let configPath = DEFAULT_CONFIG_PATH;
   let limit: number | undefined;
   let dryRun = false;
-  let concurrency = 2;
+  let concurrency = DEFAULT_CONCURRENCY;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--config" && args[i + 1]) {
@@ -125,15 +190,33 @@ function parseArgs(): {
   return { configPath, limit, dryRun, concurrency };
 }
 
-// ---------------------------------------------------------------------------
-// Load Crawl4AI pages
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: formatting
+// ─────────────────────────────────────────────────────────────────────────────
+
+function formatDuration(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function formatNumber(n: number): string {
+  return n.toLocaleString("en-US");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: load crawl pages
+// ─────────────────────────────────────────────────────────────────────────────
 
 function loadCrawlPages(): CrawlPage[] {
   const crawlDir = PATHS.crawlOutput;
   if (!fs.existsSync(crawlDir)) {
-    console.error(`\n❌ Crawl output not found: ${crawlDir}`);
-    console.error(`   Run the crawl first: cd crawl && python crawl_site.py`);
+    logError(`ERR001: Crawl output not found: ${crawlDir}`);
+    logInfo("Run the crawl first: cd crawl && python crawl_site.py");
     process.exit(1);
   }
 
@@ -154,9 +237,9 @@ function loadCrawlPages(): CrawlPage[] {
   return pages;
 }
 
-// ---------------------------------------------------------------------------
-// Filter HTTP duplicates
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: filter duplicates and error pages
+// ─────────────────────────────────────────────────────────────────────────────
 
 function filterDuplicates(pages: CrawlPage[]): CrawlPage[] {
   const seen = new Map<string, CrawlPage>();
@@ -172,19 +255,6 @@ function filterDuplicates(pages: CrawlPage[]): CrawlPage[] {
 
   return Array.from(seen.values());
 }
-
-// ---------------------------------------------------------------------------
-// Filter error pages (404, 503, etc.)
-// ---------------------------------------------------------------------------
-
-const ERROR_PAGE_MARKERS = [
-  "page not found",
-  "404",
-  "service unavailable",
-  "503 error",
-  "denne siden finnes ikke",
-  "finner ikke siden",
-];
 
 function isErrorPage(page: CrawlPage): boolean {
   const md = page.markdown.toLowerCase();
@@ -205,9 +275,9 @@ function filterErrorPages(pages: CrawlPage[]): { valid: CrawlPage[]; errorCount:
   return { valid, errorCount };
 }
 
-// ---------------------------------------------------------------------------
-// Post-processing: fix common LLM extraction issues
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: post-processing
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Post-process extracted data. Site URL comes from config, not hardcoded.
@@ -250,9 +320,9 @@ export function postProcessExtraction(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Convert extraction result to Markdown with YAML front matter
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: convert extraction to markdown
+// ─────────────────────────────────────────────────────────────────────────────
 
 function extractionToMarkdown(
   frontmatterData: Record<string, unknown>,
@@ -261,12 +331,13 @@ function extractionToMarkdown(
   return matter.stringify(body, frontmatterData);
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function main() {
   const { configPath, limit, dryRun, concurrency } = parseArgs();
+  logStart();
 
   // Load site configuration
   let site: SiteConfigFacade;
@@ -274,8 +345,9 @@ async function main() {
     const config = await loadSiteConfig(configPath);
     site = createSiteConfigFacade(config);
   } catch (err) {
-    console.error(`\n❌ Failed to load config from "${configPath}"`);
-    console.error(`   ${err instanceof Error ? err.message : String(err)}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(`ERR002: Failed to load config from "${configPath}"`);
+    logError(`ERR002: ${msg}`);
     process.exit(1);
   }
 
@@ -295,30 +367,27 @@ async function main() {
     cleanBody: site.cleanBody,
   };
 
-  console.log("=".repeat(60));
-  console.log(`  ${site.siteName} — Content Extraction`);
-  console.log("=".repeat(60));
-  console.log(`  Config: ${configPath}`);
-  console.log(`  Site:   ${site.siteUrl}`);
-  console.log(`  Model:  ${site.llm.extractionModel}`);
+  logInfo(`Config: ${configPath}`);
+  logInfo(`Site:   ${site.siteUrl}`);
+  logInfo(`Model:  ${site.llm.extractionModel}`);
 
   // Load Crawl4AI pages
-  console.log(`\n📂 Loading Crawl4AI output from: ${PATHS.crawlOutput}`);
+  logInfo(`Loading crawl output from: ${PATHS.crawlOutput}`);
   let pages = loadCrawlPages();
-  console.log(`   Found ${pages.length} crawled pages`);
+  logInfo(`Found ${pages.length} crawled pages`);
 
   // Filter HTTP duplicates
   const beforeFilter = pages.length;
   pages = filterDuplicates(pages);
   const dupsRemoved = beforeFilter - pages.length;
   if (dupsRemoved > 0) {
-    console.log(`   Filtered ${dupsRemoved} HTTP duplicates → ${pages.length} unique pages`);
+    logInfo(`Filtered ${dupsRemoved} HTTP duplicates -> ${pages.length} unique pages`);
   }
 
   // Filter error pages (404, 503, etc.)
   const { valid: validPages, errorCount: errorPagesRemoved } = filterErrorPages(pages);
   if (errorPagesRemoved > 0) {
-    console.log(`   Filtered ${errorPagesRemoved} error pages (404/503) → ${validPages.length} valid pages`);
+    logInfo(`Filtered ${errorPagesRemoved} error pages (404/503) -> ${validPages.length} valid pages`);
   }
   pages = validPages;
 
@@ -335,18 +404,18 @@ async function main() {
   // Apply limit
   if (limit) {
     toProcess = toProcess.slice(0, limit);
-    console.log(`🔧 Limit: ${limit} pages`);
+    logInfo(`Limit: ${limit} pages`);
   }
 
   if (dryRun) {
-    console.log(`\n🔍 DRY RUN — would process ${toProcess.length} pages:\n`);
+    logInfo(`DRY RUN — would process ${toProcess.length} pages:`);
     for (const { urlPath, contentTypeHint } of toProcess) {
-      const hint = contentTypeHint ? ` → ${contentTypeHint}` : "";
-      console.log(`  [ollama${hint.padEnd(15)}] ${urlPath}`);
+      const hint = contentTypeHint ? ` -> ${contentTypeHint}` : "";
+      logInfo(`  [ollama${hint.padEnd(15)}] ${urlPath}`);
     }
     const hintedCount = toProcess.filter((p) => p.contentTypeHint).length;
     const autoCount = toProcess.filter((p) => !p.contentTypeHint).length;
-    console.log(`\n  Auto-classify: ${autoCount}  |  Forced type: ${hintedCount}`);
+    logInfo(`Auto-classify: ${autoCount}  |  Forced type: ${hintedCount}`);
     return;
   }
 
@@ -367,12 +436,12 @@ async function main() {
 
   const usedPaths = new Set<string>();
 
-  console.log(`\n🚀 Extracting ${total} pages (concurrency: ${concurrency})...\n`);
+  logInfo(`Extracting ${total} pages (concurrency: ${concurrency})...`);
 
   async function processOne(item: typeof toProcess[0]): Promise<void> {
     const { page, urlPath, contentTypeHint } = item;
     const idx = ++completed;
-    const hintLabel = contentTypeHint ? `→${contentTypeHint}` : "auto";
+    const hintLabel = contentTypeHint ? `-> ${contentTypeHint}` : "auto";
 
     let eta = "";
     if (idx > 3) {
@@ -381,7 +450,7 @@ async function main() {
       const remainingMs = avgMs * (total - idx);
       eta = `  ETA ${formatDuration(remainingMs)}`;
     }
-    console.log(`[${idx}/${total}]${eta}  [${hintLabel}] ${urlPath}...`);
+    logInfo(`[${idx}/${total}]${eta}  [${hintLabel}] ${urlPath}`);
 
     const extraction = await extractWithOllama(page.markdown, urlPath, contentTypeHint, extractionCtx);
 
@@ -422,7 +491,7 @@ async function main() {
       totalCompletionTokens += extraction.completionTokens;
 
       const relOutputPath = path.relative(PATHS.projectRoot, outputPath);
-      console.log(`         ✅ ${extraction.elapsed}ms → ${relOutputPath}`);
+      logSuccess(`${extraction.elapsed}ms -> ${relOutputPath}`);
 
       extractionLog.push({
         url_path: urlPath,
@@ -438,7 +507,7 @@ async function main() {
       });
       successCount++;
     } else {
-      console.log(`         ❌ Failed`);
+      logError(`ERR003: Extraction failed for ${urlPath}`);
       extractionLog.push({
         url_path: urlPath,
         slug: page.slug || "",
@@ -489,34 +558,35 @@ async function main() {
     )
   );
 
+  // Summary
+  logSuccess("Extraction complete!");
+  logInfo(`Success: ${successCount}/${total}`);
+  if (failCount > 0) {
+    logError(`Failed:  ${failCount}/${total}`);
+  }
+  if (slugCollisions > 0) {
+    logWarning(`Slug collisions resolved: ${slugCollisions}`);
+  }
+
   const startDate = new Date(startTime);
   const endDate = new Date(endTime);
   const timeFmt = (d: Date) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
-  console.log(`\n${"=".repeat(60)}`);
-  console.log(`  Extraction complete!`);
-  console.log(`${"=".repeat(60)}`);
-  console.log(`  ✅ Success: ${successCount}/${total}`);
-  console.log(`  ❌ Failed:  ${failCount}/${total}`);
-  if (slugCollisions > 0) {
-    console.log(`  🔀 Slug collisions resolved: ${slugCollisions}`);
-  }
-  console.log(``);
-  console.log(`  ⏱️  Started:      ${timeFmt(startDate)}`);
-  console.log(`  ⏱️  Finished:     ${timeFmt(endDate)}`);
-  console.log(`  ⏱️  Wall clock:   ${formatDuration(wallClockMs)}`);
-  console.log(`  ⏱️  Avg per page: ${(avgPerPage / 1000).toFixed(1)}s`);
-  console.log(``);
-  console.log(`  🔤 Prompt tokens:     ${formatNumber(totalPromptTokens)}`);
-  console.log(`  🔤 Completion tokens: ${formatNumber(totalCompletionTokens)}`);
-  console.log(`  🔤 Total tokens:      ${formatNumber(totalTokens)}`);
-  console.log(``);
-  console.log(`  📄 Log:     ${logPath}`);
-  console.log(`  📂 Content: ${PATHS.content}`);
-  console.log(`${"=".repeat(60)}\n`);
+  logInfo(`Started:      ${timeFmt(startDate)}`);
+  logInfo(`Finished:     ${timeFmt(endDate)}`);
+  logInfo(`Wall clock:   ${formatDuration(wallClockMs)}`);
+  logInfo(`Avg per page: ${(avgPerPage / 1000).toFixed(1)}s`);
+  logInfo(`Prompt tokens:     ${formatNumber(totalPromptTokens)}`);
+  logInfo(`Completion tokens: ${formatNumber(totalCompletionTokens)}`);
+  logInfo(`Total tokens:      ${formatNumber(totalTokens)}`);
+  logInfo(`Log:     ${logPath}`);
+  logInfo(`Content: ${PATHS.content}`);
 }
 
-// Only run main() when executed directly (not when imported for testing)
+// ─────────────────────────────────────────────────────────────────────────────
+// DIRECT RUN GUARD
+// ─────────────────────────────────────────────────────────────────────────────
+
 const isDirectRun =
   process.argv[1] &&
   (process.argv[1].endsWith("orchestrator.ts") ||
@@ -524,7 +594,7 @@ const isDirectRun =
 
 if (isDirectRun) {
   main().catch((err) => {
-    console.error("Unexpected error:", err);
+    logError(`Unexpected error: ${err}`);
     process.exit(1);
   });
 }

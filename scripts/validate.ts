@@ -8,8 +8,16 @@
  * Now config-driven: loads required fields from site-config.yaml
  * instead of hardcoded REQUIRED_FIELDS.
  *
- * Usage: npm run validate -- --config site-config.smartebyernorge.yaml
+ * Usage:
+ *   npx tsx scripts/validate.ts [--config site-config.yaml]
+ *
+ * Follow the standard: docs/ai-developer/rules/script-standard.md
+ * TypeScript specifics: docs/ai-developer/rules/typescript.md
  */
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IMPORTS
+// ─────────────────────────────────────────────────────────────────────────────
 
 import fs from "node:fs";
 import path from "node:path";
@@ -17,8 +25,23 @@ import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 import { loadSiteConfig, createSiteConfigFacade, type SiteConfigFacade } from "../src/config/index.js";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SCRIPT METADATA
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SCRIPT_ID = "validate";
+const SCRIPT_NAME = "Validate Content";
+const SCRIPT_VER = "0.1.0";
+const SCRIPT_DESCRIPTION = "Validate extracted .md files against site-config.yaml required fields.";
+const SCRIPT_CATEGORY = "MIGRATION";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIGURATION
+// ─────────────────────────────────────────────────────────────────────────────
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "..");
+const DEFAULT_CONFIG_PATH = "./site-config.yaml";
 
 const PATHS = {
   projectRoot: PROJECT_ROOT,
@@ -26,9 +49,62 @@ const PATHS = {
   reports: path.join(PROJECT_ROOT, "reports"),
 } as const;
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// LOGGING
+// ─────────────────────────────────────────────────────────────────────────────
+
+function logTime(): string {
+  return new Date().toLocaleTimeString("en-GB", { hour12: false });
+}
+function logInfo(msg: string): void {
+  console.error(`[${logTime()}] INFO  ${msg}`);
+}
+function logSuccess(msg: string): void {
+  console.error(`[${logTime()}] OK    ${msg}`);
+}
+function logError(msg: string): void {
+  console.error(`[${logTime()}] ERROR ${msg}`);
+}
+function logWarning(msg: string): void {
+  console.error(`[${logTime()}] WARN  ${msg}`);
+}
+function logStart(): void {
+  logInfo(`Starting: ${SCRIPT_NAME} Ver: ${SCRIPT_VER}`);
+}
+
+// Suppress unused-variable warnings
+void logWarning;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELP
+// ─────────────────────────────────────────────────────────────────────────────
+
+function showHelp(): void {
+  const text = `
+${SCRIPT_NAME} (v${SCRIPT_VER})
+${SCRIPT_DESCRIPTION}
+
+Usage:
+  npx tsx scripts/${SCRIPT_ID}.ts [options]
+
+Options:
+  --config PATH  Path to site-config.yaml (default: ${DEFAULT_CONFIG_PATH})
+  -h, --help     Show this help message
+
+Prerequisites:
+  - Extracted .md files must exist in content/
+  - A valid site-config.yaml must exist
+
+Metadata:
+  ID:       ${SCRIPT_ID}
+  Category: ${SCRIPT_CATEGORY}
+`.trim();
+  console.error(text);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────────────────────────────────────────
 
 export interface ValidationIssue {
   file: string;
@@ -43,9 +119,33 @@ export interface ValidationResult {
   valid: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Walk content directory
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// ARGUMENT PARSING
+// ─────────────────────────────────────────────────────────────────────────────
+
+function parseArgs(): { configPath: string } {
+  const args = process.argv.slice(2);
+
+  // Check for help flag first
+  if (args.includes("-h") || args.includes("--help")) {
+    showHelp();
+    process.exit(0);
+  }
+
+  let configPath = DEFAULT_CONFIG_PATH;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--config" && args[i + 1]) {
+      configPath = args[++i];
+    }
+  }
+
+  return { configPath };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: walk content directory
+// ─────────────────────────────────────────────────────────────────────────────
 
 function walkMdFiles(dir: string): string[] {
   const results: string[] = [];
@@ -63,9 +163,9 @@ function walkMdFiles(dir: string): string[] {
   return results;
 }
 
-// ---------------------------------------------------------------------------
-// Get nested value from object by dot-path
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: get nested value from object by dot-path
+// ─────────────────────────────────────────────────────────────────────────────
 
 function getNestedValue(obj: Record<string, unknown>, dotPath: string): unknown {
   const parts = dotPath.split(".");
@@ -79,9 +179,9 @@ function getNestedValue(obj: Record<string, unknown>, dotPath: string): unknown 
   return current;
 }
 
-// ---------------------------------------------------------------------------
-// Validate a single file
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: validate a single file
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Validate a single .md file against the config-driven required fields.
@@ -195,29 +295,13 @@ export function validateFile(
   };
 }
 
-// ---------------------------------------------------------------------------
-// CLI args
-// ---------------------------------------------------------------------------
-
-function parseArgs(): { configPath: string } {
-  const args = process.argv.slice(2);
-  let configPath = "./site-config.yaml";
-
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--config" && args[i + 1]) {
-      configPath = args[++i];
-    }
-  }
-
-  return { configPath };
-}
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function main() {
   const { configPath } = parseArgs();
+  logStart();
 
   // Load site configuration
   let site: SiteConfigFacade;
@@ -225,8 +309,9 @@ async function main() {
     const config = await loadSiteConfig(configPath);
     site = createSiteConfigFacade(config);
   } catch (err) {
-    console.error(`\n❌ Failed to load config from "${configPath}"`);
-    console.error(`   ${err instanceof Error ? err.message : String(err)}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(`ERR001: Failed to load config from "${configPath}"`);
+    logError(`ERR001: ${msg}`);
     process.exit(1);
   }
 
@@ -236,19 +321,17 @@ async function main() {
     requiredFieldsMap[ct.name] = ct.required_fields;
   }
 
-  console.log("=".repeat(60));
-  console.log(`  Validate extracted content — ${site.siteName}`);
-  console.log("=".repeat(60));
+  logInfo(`Site: ${site.siteName}`);
 
   const mdFiles = walkMdFiles(PATHS.content);
 
   if (mdFiles.length === 0) {
-    console.error(`\n❌ No .md files found in ${PATHS.content}`);
-    console.error(`   Run: npm run extract -- --config ${configPath}`);
+    logError(`ERR002: No .md files found in ${PATHS.content}`);
+    logInfo(`Run: npm run extract -- --config ${configPath}`);
     process.exit(1);
   }
 
-  console.log(`\n📄 Validating ${mdFiles.length} files...\n`);
+  logInfo(`Validating ${mdFiles.length} files...`);
 
   const results: ValidationResult[] = [];
   let validCount = 0;
@@ -274,11 +357,12 @@ async function main() {
     warningCount += warnings;
 
     if (result.issues.length > 0) {
-      const icon = result.valid ? "⚠️ " : "❌";
-      console.log(`  ${icon} ${result.file} (${result.archetype})`);
       for (const issue of result.issues) {
-        const sev = issue.severity === "error" ? "  ERROR" : "  WARN ";
-        console.log(`     ${sev}: ${issue.message}`);
+        if (issue.severity === "error") {
+          logError(`${result.file} (${result.archetype}): ${issue.message}`);
+        } else {
+          logWarning(`${result.file} (${result.archetype}): ${issue.message}`);
+        }
       }
     }
   }
@@ -305,20 +389,25 @@ async function main() {
   );
 
   // Summary
-  console.log(`\n${"=".repeat(60)}`);
-  console.log(`  Validation complete!`);
-  console.log(`  ✅ Valid:    ${validCount}/${mdFiles.length}`);
-  console.log(`  ❌ Invalid:  ${invalidCount}/${mdFiles.length}`);
-  console.log(`  ⚠️  Warnings: ${warningCount}`);
-  console.log(`  📄 Report:   ${reportPath}`);
-  console.log(`${"=".repeat(60)}\n`);
+  logSuccess("Validation complete!");
+  logInfo(`Valid:    ${validCount}/${mdFiles.length}`);
+  if (invalidCount > 0) {
+    logError(`Invalid:  ${invalidCount}/${mdFiles.length}`);
+  }
+  if (warningCount > 0) {
+    logWarning(`Warnings: ${warningCount}`);
+  }
+  logInfo(`Report:   ${reportPath}`);
 
   if (invalidCount > 0) {
     process.exit(1);
   }
 }
 
-// Only run main() when executed directly
+// ─────────────────────────────────────────────────────────────────────────────
+// DIRECT RUN GUARD
+// ─────────────────────────────────────────────────────────────────────────────
+
 const isDirectRun =
   process.argv[1] &&
   (process.argv[1].endsWith("validate.ts") ||
@@ -326,7 +415,7 @@ const isDirectRun =
 
 if (isDirectRun) {
   main().catch((err) => {
-    console.error("Unexpected error:", err);
+    logError(`Unexpected error: ${err}`);
     process.exit(1);
   });
 }
