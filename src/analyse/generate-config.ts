@@ -12,6 +12,7 @@
 import { callClaude } from "./claude-cli.js";
 import type { SamplePage } from "./sample-crawler.js";
 import type { DiscoveredType } from "./discover-types.js";
+import { logWarning } from "../../lib/logger.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -318,7 +319,7 @@ export function generateCleanupRules(
       new RegExp(rule.regex, rule.flags);
       validRules.push(rule);
     } catch (err) {
-      console.log(`    ⚠️  Invalid regex for "${rule.name}", skipping: ${rule.regex}`);
+      logWarning(`Invalid regex for "${rule.name}", skipping: ${rule.regex}`);
     }
   }
 

@@ -32,6 +32,7 @@ import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 import { loadSiteConfig, createSiteConfigFacade, type SiteConfigFacade } from "../src/config/index.js";
 import { extractWithOllama, type ExtractionResult, type ExtractionContext } from "../lib/ollama-client.js";
+import { logInfo, logSuccess, logError, logWarning, logStart, enableFileLogging, closeFileLogging } from "../lib/logger.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SCRIPT METADATA
@@ -86,28 +87,7 @@ const ERROR_PAGE_MARKERS = [
   "finner ikke siden",
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LOGGING
-// ─────────────────────────────────────────────────────────────────────────────
-
-function logTime(): string {
-  return new Date().toLocaleTimeString("en-GB", { hour12: false });
-}
-function logInfo(msg: string): void {
-  console.error(`[${logTime()}] INFO  ${msg}`);
-}
-function logSuccess(msg: string): void {
-  console.error(`[${logTime()}] OK    ${msg}`);
-}
-function logError(msg: string): void {
-  console.error(`[${logTime()}] ERROR ${msg}`);
-}
-function logWarning(msg: string): void {
-  console.error(`[${logTime()}] WARN  ${msg}`);
-}
-function logStart(): void {
-  logInfo(`Starting: ${SCRIPT_NAME} Ver: ${SCRIPT_VER}`);
-}
+// Logging: imported from lib/logger.ts
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELP
@@ -358,7 +338,7 @@ function extractionToMarkdown(
 
 async function main() {
   const { configPath, limit, dryRun, concurrency } = parseArgs();
-  logStart();
+  logStart(SCRIPT_NAME, SCRIPT_VER);
 
   // Load site configuration
   let site: SiteConfigFacade;
@@ -447,6 +427,13 @@ async function main() {
   // Ensure output directories exist
   fs.mkdirSync(PATHS.content, { recursive: true });
   fs.mkdirSync(PATHS.reports, { recursive: true });
+
+  // Enable file logging now that reports dir exists
+  enableFileLogging(path.join(PATHS.reports, "orchestrator.log"), {
+    scriptName: SCRIPT_NAME,
+    scriptVer: SCRIPT_VER,
+    extra: { Config: configPath, Site: site.siteUrl, "Run dir": PATHS.runDir },
+  });
 
   // Process pages with concurrency
   const extractionLog: ExtractionLogEntry[] = [];
@@ -606,6 +593,8 @@ async function main() {
   logInfo(`Total tokens:      ${formatNumber(totalTokens)}`);
   logInfo(`Log:     ${logPath}`);
   logInfo(`Content: ${PATHS.content}`);
+
+  closeFileLogging();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -69,38 +69,90 @@ const SCRIPT_CATEGORY = "MIGRATION";
 
 ---
 
-## TypeScript Logging Functions
+## Shared Logger (`lib/logger.ts`)
 
-The TypeScript implementation of the standard logging functions. Copy them from the template — don't modify the format.
+All scripts use the **shared logger module** — never define inline logging functions.
 
 ```typescript
-function logTime(): string {
-  return new Date().toLocaleTimeString("en-GB", { hour12: false });
-}
-function logInfo(msg: string): void {
-  console.error(`[${logTime()}] INFO  ${msg}`);
-}
-function logSuccess(msg: string): void {
-  console.error(`[${logTime()}] OK    ${msg}`);
-}
-function logError(msg: string): void {
-  console.error(`[${logTime()}] ERROR ${msg}`);
-}
-function logWarning(msg: string): void {
-  console.error(`[${logTime()}] WARN  ${msg}`);
-}
-function logStart(): void {
-  logInfo(`Starting: ${SCRIPT_NAME} Ver: ${SCRIPT_VER}`);
+import {
+  logInfo, logSuccess, logError, logWarning,
+  logStart, logRaw,
+  enableFileLogging, closeFileLogging,
+} from "../lib/logger.js";
+```
+
+### Available functions
+
+| Function | Purpose |
+|----------|---------|
+| `logInfo(msg)` | General progress messages |
+| `logSuccess(msg)` | Completion / success messages |
+| `logError(msg)` | Error messages |
+| `logWarning(msg)` | Warning messages |
+| `logStart(name, ver)` | Standard "Starting: Name Ver: x.y.z" banner |
+| `logRaw(text)` | Raw text with no timestamp prefix (subprocess output) |
+| `enableFileLogging(path, header?)` | Start writing logs to a file (also replays early buffer) |
+| `closeFileLogging()` | Flush and close the log file |
+
+### How it works
+
+1. **stderr always**: Every log call writes to stderr immediately.
+2. **Early buffer**: Lines logged *before* `enableFileLogging()` are buffered in memory.
+3. **File logging**: After calling `enableFileLogging(path)`, the buffer is replayed to the file, and all subsequent log calls write to both stderr and the file.
+4. **Close**: Call `closeFileLogging()` at the end of `main()` to flush.
+
+### Typical usage in a script
+
+```typescript
+async function main() {
+  const opts = parseArgs();
+  logStart(SCRIPT_NAME, SCRIPT_VER);   // logged to stderr + early buffer
+
+  // ... create output directories ...
+
+  enableFileLogging(path.join(reportsDir, `${SCRIPT_ID}.log`), {
+    scriptName: SCRIPT_NAME,
+    scriptVer: SCRIPT_VER,
+    extra: { Config: configPath, Site: siteUrl },
+  });
+
+  // ... do work — all logInfo/logError/etc go to stderr AND file ...
+
+  logSuccess("Done");
+  closeFileLogging();
 }
 ```
 
-Logs go to stderr (`console.error`) so that stdout remains available for piped data or structured output.
+### File logging header
 
-The only acceptable uses of raw `console.log` are:
-- Blank lines for visual separation
-- Separator lines for formatting
-- Inside the `showHelp()` function
-- Structured data output that the user pipes to another command
+When `enableFileLogging` receives a `header` object, the log file starts with:
+
+```
+═══════════════════════════════════════════════════════════════
+  ScriptName vX.Y.Z — started 2026-02-22 14:30:00
+  Config: ./site-config.yaml
+  Site:   https://example.com
+═══════════════════════════════════════════════════════════════
+```
+
+This makes log files self-describing for both humans and LLM agents.
+
+### Library modules
+
+Library modules in `lib/` and `src/` should also use the shared logger instead of `console.log`/`console.error`. This ensures their output is captured in the log file.
+
+```typescript
+// In lib/ollama-client.ts, src/analyse/sample-crawler.ts, etc.
+import { logInfo, logError } from "./logger.js";  // or "../../lib/logger.js"
+```
+
+### Rules
+
+- **Never** define inline `logInfo`/`logError` etc. in scripts — always import from `lib/logger.ts`
+- **Never** use `console.log` or `console.error` for status messages — use the shared logger
+- The only acceptable uses of raw `console.error` are inside the `showHelp()` function
+- `logRaw()` is for subprocess output (e.g. Python crawler) that has its own formatting
+- Scripts that don't produce output directories (e.g. `check-ollama.ts`) skip `enableFileLogging` — they still get stderr output
 
 ---
 
@@ -141,7 +193,7 @@ The template (`docs/ai-developer/templates/typescript/script-template.ts`) has t
 | IMPORTS | Node and npm imports | All scripts |
 | SCRIPT METADATA | The 5 required metadata fields | All scripts |
 | CONFIGURATION | Variables for URLs, paths, defaults | Scripts with configurable values |
-| LOGGING | Standard logging functions | All scripts |
+| LOGGING | Shared logger import reference (see `lib/logger.ts`) | All scripts |
 | HELP | The `showHelp()` function | All scripts |
 | TYPES | TypeScript interfaces | As needed |
 | ARGUMENT PARSING | `parseArgs()` function | All scripts |
@@ -265,8 +317,11 @@ There is no automated validation tool for TypeScript scripts yet. Manual checkli
 
 - [ ] All 5 metadata fields are set
 - [ ] `--help` flag produces standard format output
+- [ ] Logging imported from `lib/logger.ts` — no inline logging functions
 - [ ] All logging uses `logInfo`/`logSuccess`/`logError`/`logWarning` — no raw `console.log` for status messages
-- [ ] `logStart()` is called as the first action after the help check
+- [ ] `logStart(SCRIPT_NAME, SCRIPT_VER)` is called as the first action after the help check
+- [ ] `enableFileLogging()` called after creating the output directory (if applicable)
+- [ ] `closeFileLogging()` called at the end of `main()` (if file logging is enabled)
 - [ ] All error logs have unique error identifiers (`ERR001`, `ERR002`, etc.)
 - [ ] External command dependencies are checked before use
 - [ ] Direct run guard is present

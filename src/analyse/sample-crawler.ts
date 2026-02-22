@@ -10,7 +10,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { logInfo, logRaw } from "../../lib/logger.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -64,33 +65,45 @@ export async function samplePages(
     for (const file of existingFiles) {
       fs.unlinkSync(path.join(crawlOutputDir, file));
     }
-    console.log(`  Cleaned ${existingFiles.length} existing crawl output files`);
+    logInfo(`Cleaned ${existingFiles.length} existing crawl output files`);
   }
 
   // Run the Python crawler
-  console.log(`  Crawling ${siteUrl} (sample: ${sampleSize} pages)...`);
-  console.log(`  Output: ${crawlOutputDir}`);
-  console.log(`  This may take a few minutes...\n`);
+  logInfo(`Crawling ${siteUrl} (sample: ${sampleSize} pages)...`);
+  logInfo(`Output: ${crawlOutputDir}`);
+  logInfo("This may take a few minutes...");
 
   // Find Python executable: prefer venv, fall back to python3
   const venvPython = path.join(projectRoot, "crawl", ".venv", "bin", "python3");
   const pythonExe = fs.existsSync(venvPython) ? venvPython : "python3";
 
   try {
-    const cmd = [
-      `"${pythonExe}"`,
-      `"${crawlScript}"`,
-      `--url "${siteUrl}"`,
-      `--limit ${sampleSize}`,
-      `--output-dir "${crawlOutputDir}"`,
-      `--reports-dir "${reportsDir}"`,
-    ].join(" ");
+    const args = [
+      crawlScript,
+      "--url", siteUrl,
+      "--limit", String(sampleSize),
+      "--output-dir", crawlOutputDir,
+      "--reports-dir", reportsDir,
+    ];
 
-    execSync(cmd, {
+    const result = spawnSync(pythonExe, args, {
       cwd: projectRoot,
-      stdio: "inherit",
       timeout: 300_000, // 5 minute timeout
+      encoding: "utf-8",
     });
+
+    // Pipe Python stdout/stderr through the logger
+    if (result.stdout) {
+      logRaw(result.stdout);
+    }
+    if (result.stderr) {
+      logRaw(result.stderr);
+    }
+
+    if (result.status !== 0) {
+      const errMsg = result.stderr || result.error?.message || `Exit code ${result.status}`;
+      throw new Error(errMsg);
+    }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     throw new Error(`Crawl failed: ${msg}\nMake sure crawl4ai is installed: pip install -r crawl/requirements.txt`);
@@ -128,6 +141,6 @@ export function loadCrawlOutput(crawlOutputDir: string): SamplePage[] {
     }
   }
 
-  console.log(`  Loaded ${pages.length} pages from crawl output`);
+  logInfo(`Loaded ${pages.length} pages from crawl output`);
   return pages;
 }

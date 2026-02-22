@@ -22,6 +22,7 @@ import { Ollama } from "ollama";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { loadSiteConfig, createSiteConfigFacade } from "../src/config/index.js";
+import { logInfo, logSuccess, logError, logWarning, logStart } from "../lib/logger.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SCRIPT METADATA
@@ -57,28 +58,7 @@ const SAMPLE_HTML = `
 </html>
 `;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LOGGING
-// ─────────────────────────────────────────────────────────────────────────────
-
-function logTime(): string {
-  return new Date().toLocaleTimeString("en-GB", { hour12: false });
-}
-function logInfo(msg: string): void {
-  console.error(`[${logTime()}] INFO  ${msg}`);
-}
-function logSuccess(msg: string): void {
-  console.error(`[${logTime()}] OK    ${msg}`);
-}
-function logError(msg: string): void {
-  console.error(`[${logTime()}] ERROR ${msg}`);
-}
-function logWarning(msg: string): void {
-  console.error(`[${logTime()}] WARN  ${msg}`);
-}
-function logStart(): void {
-  logInfo(`Starting: ${SCRIPT_NAME} Ver: ${SCRIPT_VER}`);
-}
+// Logging: imported from lib/logger.ts
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELP
@@ -307,7 +287,7 @@ function checkClaudeApiKey(analysisModel: string): boolean {
 
 async function main() {
   const { configPath } = parseArgs();
-  logStart();
+  logStart(SCRIPT_NAME, SCRIPT_VER);
 
   // Load site config to get model name
   let siteName = "Content Migration";

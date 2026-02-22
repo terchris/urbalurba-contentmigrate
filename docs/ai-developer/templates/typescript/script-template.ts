@@ -34,32 +34,16 @@ const SCRIPT_CATEGORY = "MIGRATION";
 // const DEFAULT_OUTPUT = "./output";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LOGGING
+// LOGGING — uses shared logger (lib/logger.ts)
 // ─────────────────────────────────────────────────────────────────────────────
-
-function logTime(): string {
-  return new Date().toLocaleTimeString("en-GB", { hour12: false });
-}
-function logInfo(msg: string): void {
-  console.error(`[${logTime()}] INFO  ${msg}`);
-}
-function logSuccess(msg: string): void {
-  console.error(`[${logTime()}] OK    ${msg}`);
-}
-function logError(msg: string): void {
-  console.error(`[${logTime()}] ERROR ${msg}`);
-}
-function logWarning(msg: string): void {
-  console.error(`[${logTime()}] WARN  ${msg}`);
-}
-function logStart(): void {
-  logInfo(`Starting: ${SCRIPT_NAME} Ver: ${SCRIPT_VER}`);
-}
-
-// Suppress unused-variable warnings for logging functions in the template.
-// Remove these lines once you use the functions.
-void logSuccess;
-void logWarning;
+//
+// import { logInfo, logSuccess, logError, logWarning, logStart,
+//          enableFileLogging, closeFileLogging } from "../lib/logger.js";
+//
+// The shared logger writes to stderr by default. After creating an output
+// directory, call enableFileLogging(path) to also write to a .log file.
+// Call closeFileLogging() at the end of main().
+//
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELP
@@ -126,12 +110,20 @@ function parseArgs(): ScriptArgs {
 
 async function main() {
   const _opts = parseArgs();
-  logStart();
+  logStart(SCRIPT_NAME, SCRIPT_VER);
+
+  // After creating your output directory, enable file logging:
+  // enableFileLogging(path.join(reportsDir, `${SCRIPT_ID}.log`), {
+  //   scriptName: SCRIPT_NAME,
+  //   scriptVer: SCRIPT_VER,
+  //   extra: { Config: configPath, Site: siteUrl },
+  // });
 
   // Your implementation here
   logInfo("Hello from the template!");
 
   logSuccess("Done");
+  // closeFileLogging();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@
 
 import { callClaude } from "./claude-cli.js";
 import type { SamplePage } from "./sample-crawler.js";
+import { logInfo, logWarning } from "../../lib/logger.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -151,7 +152,7 @@ export function discoverContentTypes(
 ): DiscoveredType[] {
   const userPrompt = buildDiscoveryPrompt(siteUrl, pages);
 
-  console.log(`  Sending ${pages.length} page summaries to Claude CLI...`);
+  logInfo(`Sending ${pages.length} page summaries to Claude CLI...`);
 
   const result = callClaude<{ content_types: DiscoveredType[] }>({
     prompt: userPrompt,
@@ -164,14 +165,14 @@ export function discoverContentTypes(
     timeout: 180_000, // 3 minutes for large samples
   });
 
-  console.log(`  Discovery completed in ${(result.durationMs / 1000).toFixed(1)}s ($${result.costUsd.toFixed(4)})`);
+  logInfo(`Discovery completed in ${(result.durationMs / 1000).toFixed(1)}s ($${result.costUsd.toFixed(4)})`);
 
   // Validate and clean up
   let types = result.data.content_types;
 
   // Cap at 15 types
   if (types.length > 15) {
-    console.log(`  ⚠️  ${types.length} types discovered, capping at 15`);
+    logWarning(`${types.length} types discovered, capping at 15`);
     types = types.slice(0, 15);
   }
 

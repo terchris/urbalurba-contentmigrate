@@ -25,6 +25,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 import { loadSiteConfig, createSiteConfigFacade, type SiteConfigFacade } from "../src/config/index.js";
+import { logInfo, logSuccess, logError, logWarning, logStart, enableFileLogging, closeFileLogging } from "../lib/logger.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SCRIPT METADATA
@@ -94,31 +95,7 @@ function computeValidatePaths(configPath: string, runName?: string) {
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LOGGING
-// ─────────────────────────────────────────────────────────────────────────────
-
-function logTime(): string {
-  return new Date().toLocaleTimeString("en-GB", { hour12: false });
-}
-function logInfo(msg: string): void {
-  console.error(`[${logTime()}] INFO  ${msg}`);
-}
-function logSuccess(msg: string): void {
-  console.error(`[${logTime()}] OK    ${msg}`);
-}
-function logError(msg: string): void {
-  console.error(`[${logTime()}] ERROR ${msg}`);
-}
-function logWarning(msg: string): void {
-  console.error(`[${logTime()}] WARN  ${msg}`);
-}
-function logStart(): void {
-  logInfo(`Starting: ${SCRIPT_NAME} Ver: ${SCRIPT_VER}`);
-}
-
-// Suppress unused-variable warnings
-void logWarning;
+// Logging: imported from lib/logger.ts
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELP
@@ -350,7 +327,7 @@ export function validateFile(
 
 async function main() {
   const { configPath, runName } = parseArgs();
-  logStart();
+  logStart(SCRIPT_NAME, SCRIPT_VER);
 
   // Load site configuration
   let site: SiteConfigFacade;
@@ -372,6 +349,13 @@ async function main() {
     logInfo("Run extraction first: npx tsx scripts/orchestrator.ts --config " + configPath);
     process.exit(1);
   }
+
+  // Enable file logging now that we know the run dir
+  enableFileLogging(path.join(PATHS.reports, "validate.log"), {
+    scriptName: SCRIPT_NAME,
+    scriptVer: SCRIPT_VER,
+    extra: { Config: configPath, "Run dir": PATHS.runDir },
+  });
 
   // Build required fields map from config
   const requiredFieldsMap: Record<string, string[]> = {};
@@ -458,6 +442,8 @@ async function main() {
     logWarning(`Warnings: ${warningCount}`);
   }
   logInfo(`Report:   ${reportPath}`);
+
+  closeFileLogging();
 
   if (invalidCount > 0) {
     process.exit(1);

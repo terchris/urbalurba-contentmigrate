@@ -40,6 +40,7 @@ import {
   type GeneratedTypeConfig,
 } from "../src/analyse/generate-config.js";
 import { assembleConfig, deriveSiteSlug } from "../src/analyse/assemble-config.js";
+import { logInfo, logSuccess, logError, logWarning, logStart, enableFileLogging, closeFileLogging } from "../lib/logger.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SCRIPT METADATA
@@ -62,28 +63,7 @@ const DEFAULT_SAMPLE_SIZE = 30;
 const MAX_PAGES_FOR_CLEANUP = 5;
 const MAX_PAGES_PER_TYPE = 3;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LOGGING
-// ─────────────────────────────────────────────────────────────────────────────
-
-function logTime(): string {
-  return new Date().toLocaleTimeString("en-GB", { hour12: false });
-}
-function logInfo(msg: string): void {
-  console.error(`[${logTime()}] INFO  ${msg}`);
-}
-function logSuccess(msg: string): void {
-  console.error(`[${logTime()}] OK    ${msg}`);
-}
-function logError(msg: string): void {
-  console.error(`[${logTime()}] ERROR ${msg}`);
-}
-function logWarning(msg: string): void {
-  console.error(`[${logTime()}] WARN  ${msg}`);
-}
-function logStart(): void {
-  logInfo(`Starting: ${SCRIPT_NAME} Ver: ${SCRIPT_VER}`);
-}
+// Logging: imported from lib/logger.ts
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELP
@@ -275,7 +255,7 @@ function selectDiverseSample(pages: SamplePage[], maxCount: number): SamplePage[
 
 async function main() {
   const opts = parseArgs();
-  logStart();
+  logStart(SCRIPT_NAME, SCRIPT_VER);
 
   // Check prerequisites before doing any work
   checkPrerequisites(opts.skipCrawl);
@@ -297,6 +277,13 @@ async function main() {
   if (!opts.dryRun) {
     fs.mkdirSync(sitePaths.crawlOutputDir, { recursive: true });
     fs.mkdirSync(sitePaths.reportsDir, { recursive: true });
+
+    // Enable file logging now that reports dir exists
+    enableFileLogging(path.join(sitePaths.reportsDir, "analyse.log"), {
+      scriptName: SCRIPT_NAME,
+      scriptVer: SCRIPT_VER,
+      extra: { URL: opts.url, Site: siteSlug },
+    });
   }
 
   // ── Phase 1: Sample crawl ──────────────────────────────────────────────
@@ -461,6 +448,8 @@ async function main() {
     logInfo(`  2. Extract: npx tsx scripts/orchestrator.ts --config ${sitePaths.configPath}`);
     logInfo(`  3. Validate: npx tsx scripts/validate.ts --config ${sitePaths.configPath}`);
   }
+
+  closeFileLogging();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

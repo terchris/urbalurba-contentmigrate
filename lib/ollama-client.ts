@@ -14,6 +14,7 @@
 import { Ollama } from "ollama";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { logInfo, logError } from "./logger.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -195,7 +196,7 @@ export async function extractWithOllama(
       // Simple archetype (no extras) — base is enough
       if (!ctx.typesWithExtras.includes(contentType)) {
         const elapsed = Date.now() - startTime;
-        console.log(`         📐 Single-pass (${contentType}), ${trimmed.length} chars (was ${markdown.length})`);
+        logInfo(`Single-pass (${contentType}), ${trimmed.length} chars (was ${markdown.length})`);
         return {
           data: baseParsed as unknown as Record<string, unknown>,
           elapsed,
@@ -208,7 +209,7 @@ export async function extractWithOllama(
     // --- Pass 2 (or only pass if forced): Extract with archetype schema ---
     const archetypeSchema = ctx.schemas[contentType];
     if (!archetypeSchema) {
-      console.error(`  ❌ No schema found for content type "${contentType}"`);
+      logError(`No schema found for content type "${contentType}"`);
       return null;
     }
 
@@ -250,11 +251,11 @@ export async function extractWithOllama(
     }
 
     const passLabel = contentTypeHint ? "Forced" : "Two-pass";
-    console.log(`         📐 ${passLabel} (${contentType}), ${trimmed.length} chars (was ${markdown.length})`);
+    logInfo(`${passLabel} (${contentType}), ${trimmed.length} chars (was ${markdown.length})`);
     return { data: fullParsed as Record<string, unknown>, elapsed, promptTokens, completionTokens };
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.error(`  ❌ Ollama extraction failed for ${urlPath}: ${msg}`);
+    logError(`Ollama extraction failed for ${urlPath}: ${msg}`);
     return null;
   }
 }
