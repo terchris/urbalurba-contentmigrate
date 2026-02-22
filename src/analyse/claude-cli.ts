@@ -6,9 +6,13 @@
  *
  * This avoids needing a separate ANTHROPIC_API_KEY — the CLI uses
  * the existing OAuth session from the user's subscription.
+ *
+ * Uses execFileSync (not execSync) to pass arguments directly to the
+ * process without shell interpretation, avoiding escaping issues with
+ * large JSON schemas.
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -48,6 +52,11 @@ export interface ClaudeCliResult<T = unknown> {
  * Uses `claude --print --output-format json --json-schema ...` which
  * leverages the user's Max/Pro subscription (no API key needed).
  *
+ * Arguments are passed directly via execFileSync (no shell), so there
+ * are no escaping issues with complex JSON schemas or prompts.
+ *
+ * The prompt is sent via stdin to handle large/complex prompts safely.
+ *
  * @throws Error if the CLI call fails or returns an error
  */
 export function callClaude<T = unknown>(options: ClaudeCliOptions): ClaudeCliResult<T> {
@@ -65,9 +74,8 @@ export function callClaude<T = unknown>(options: ClaudeCliOptions): ClaudeCliRes
     ? `${systemPrompt}\n\n---\n\n${prompt}`
     : prompt;
 
-  // Build CLI arguments
-  const args: string[] = [
-    "claude",
+  // Build CLI arguments — passed directly, no shell escaping needed
+  const cliArgs: string[] = [
     "--print",
     "--output-format", "json",
     "--json-schema", JSON.stringify(jsonSchema),
@@ -75,42 +83,19 @@ export function callClaude<T = unknown>(options: ClaudeCliOptions): ClaudeCliRes
   ];
 
   if (model) {
-    args.push("--model", model);
+    cliArgs.push("--model", model);
   }
 
   if (maxBudget) {
-    args.push("--max-budget-usd", maxBudget.toString());
+    cliArgs.push("--max-budget-usd", maxBudget.toString());
   }
-
-  args.push("-p", fullPrompt);
-
-  // Build the command string with proper escaping
-  // We pass the prompt via stdin to avoid shell escaping issues with large prompts
-  const stdinPrompt = fullPrompt;
-  const stdinArgs: string[] = [
-    "claude",
-    "--print",
-    "--output-format", "json",
-    "--json-schema", JSON.stringify(jsonSchema),
-    "--no-session-persistence",
-  ];
-
-  if (model) {
-    stdinArgs.push("--model", model);
-  }
-
-  if (maxBudget) {
-    stdinArgs.push("--max-budget-usd", maxBudget.toString());
-  }
-
-  // Use stdin for the prompt to handle large/complex prompts safely
-  const shellCmd = stdinArgs
-    .map((arg) => shellEscape(arg))
-    .join(" ");
 
   try {
-    const stdout = execSync(shellCmd, {
-      input: stdinPrompt,
+    // execFileSync passes args directly to the process (no shell),
+    // so JSON schemas with quotes, braces, etc. work without escaping.
+    // The prompt is sent via stdin to handle large content.
+    const stdout = execFileSync("claude", cliArgs, {
+      input: fullPrompt,
       timeout,
       maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large responses
       encoding: "utf-8",
@@ -142,20 +127,4 @@ export function callClaude<T = unknown>(options: ClaudeCliOptions): ClaudeCliRes
     }
     throw error;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Escape a string for safe use in a shell command.
- */
-function shellEscape(arg: string): string {
-  // If the arg contains no special characters, return as-is
-  if (/^[a-zA-Z0-9._\-/:=]+$/.test(arg)) {
-    return arg;
-  }
-  // Wrap in single quotes, escaping any existing single quotes
-  return `'${arg.replace(/'/g, "'\\''")}'`;
 }
