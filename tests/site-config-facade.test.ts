@@ -19,9 +19,9 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { loadSiteConfig, createSiteConfigFacade } from "../src/config/index.js";
 
 // Hardcoded modules for comparison
-import { SECTION_DIRS, ARCHETYPES } from "../lib/config.js";
-import { SCHEMAS, REQUIRED_FIELDS } from "../lib/schemas.js";
-import { cleanBody as hardcodedCleanBody } from "../lib/clean-body.js";
+import { SECTION_DIRS, ARCHETYPES } from "../legacy/config.js";
+import { SCHEMAS, REQUIRED_FIELDS } from "../legacy/schemas.js";
+import { cleanBody as hardcodedCleanBody } from "../legacy/clean-body.js";
 
 const REFERENCE_CONFIG_PATH = resolve(
   import.meta.dirname ?? ".",

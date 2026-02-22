@@ -22,7 +22,7 @@ import {
   TechSchema,
   PressSchema,
   SCHEMAS,
-} from "../lib/schemas.js";
+} from "../legacy/schemas.js";
 
 const REFERENCE_CONFIG_PATH = resolve(
   import.meta.dirname ?? ".",

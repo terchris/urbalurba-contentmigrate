@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
 import { buildRouter, buildOutputDirMap } from "../src/config/routing-builder.js";
 import { loadSiteConfig } from "../src/config/config-loader.js";
-import { SECTION_DIRS } from "../lib/config.js";
+import { SECTION_DIRS } from "../legacy/config.js";
 
 const REFERENCE_CONFIG_PATH = resolve(
   import.meta.dirname ?? ".",

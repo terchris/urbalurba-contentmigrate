@@ -5,26 +5,38 @@
  * Checks required frontmatter fields per archetype, format correctness,
  * and flags issues for review.
  *
- * Usage: npm run validate
+ * Now config-driven: loads required fields from site-config.yaml
+ * instead of hardcoded REQUIRED_FIELDS.
+ *
+ * Usage: npm run validate -- --config site-config.smartebyernorge.yaml
  */
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
-import { PATHS } from "../lib/config.js";
-import { REQUIRED_FIELDS, type ContentType } from "../lib/schemas.js";
+import { loadSiteConfig, createSiteConfigFacade, type SiteConfigFacade } from "../src/config/index.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = path.resolve(__dirname, "..");
+
+const PATHS = {
+  projectRoot: PROJECT_ROOT,
+  content: path.join(PROJECT_ROOT, "content"),
+  reports: path.join(PROJECT_ROOT, "reports"),
+} as const;
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-interface ValidationIssue {
+export interface ValidationIssue {
   file: string;
   severity: "error" | "warning";
   message: string;
 }
 
-interface ValidationResult {
+export interface ValidationResult {
   file: string;
   archetype: string;
   issues: ValidationIssue[];
@@ -71,8 +83,17 @@ function getNestedValue(obj: Record<string, unknown>, dotPath: string): unknown 
 // Validate a single file
 // ---------------------------------------------------------------------------
 
-function validateFile(filePath: string): ValidationResult {
-  const relativePath = path.relative(PATHS.content, filePath);
+/**
+ * Validate a single .md file against the config-driven required fields.
+ * Exported for unit testing.
+ */
+export function validateFile(
+  filePath: string,
+  contentDir: string,
+  requiredFieldsMap: Record<string, string[]>,
+  knownContentTypes: string[]
+): ValidationResult {
+  const relativePath = path.relative(contentDir, filePath);
   const issues: ValidationIssue[] = [];
 
   // Read and parse frontmatter
@@ -102,8 +123,17 @@ function validateFile(filePath: string): ValidationResult {
     return { file: relativePath, archetype: "unknown", issues, valid: false };
   }
 
+  // Check content_type is known
+  if (!knownContentTypes.includes(archetype)) {
+    issues.push({
+      file: relativePath,
+      severity: "warning",
+      message: `Unknown archetype: ${archetype}`,
+    });
+  }
+
   // Check required fields for this archetype
-  const required = REQUIRED_FIELDS[archetype as ContentType];
+  const required = requiredFieldsMap[archetype];
   if (required) {
     for (const field of required) {
       if (field === "body") {
@@ -125,15 +155,9 @@ function validateFile(filePath: string): ValidationResult {
         }
       }
     }
-  } else {
-    issues.push({
-      file: relativePath,
-      severity: "warning",
-      message: `Unknown archetype: ${archetype}`,
-    });
   }
 
-  // Check date format (v2: field is `date`, not `date_published`)
+  // Check date format
   const dateValue = data.date as string;
   if (dateValue && dateValue !== "" && !/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
     issues.push({
@@ -163,9 +187,6 @@ function validateFile(filePath: string): ValidationResult {
     });
   }
 
-  // Note: migration metadata (confidence, needs_review) is now in
-  // reports/extraction-log.json, not in front matter. No checks needed here.
-
   return {
     file: relativePath,
     archetype,
@@ -175,19 +196,55 @@ function validateFile(filePath: string): ValidationResult {
 }
 
 // ---------------------------------------------------------------------------
+// CLI args
+// ---------------------------------------------------------------------------
+
+function parseArgs(): { configPath: string } {
+  const args = process.argv.slice(2);
+  let configPath = "./site-config.yaml";
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--config" && args[i + 1]) {
+      configPath = args[++i];
+    }
+  }
+
+  return { configPath };
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
-function main() {
+async function main() {
+  const { configPath } = parseArgs();
+
+  // Load site configuration
+  let site: SiteConfigFacade;
+  try {
+    const config = await loadSiteConfig(configPath);
+    site = createSiteConfigFacade(config);
+  } catch (err) {
+    console.error(`\n❌ Failed to load config from "${configPath}"`);
+    console.error(`   ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+
+  // Build required fields map from config
+  const requiredFieldsMap: Record<string, string[]> = {};
+  for (const ct of site.config.content_types) {
+    requiredFieldsMap[ct.name] = ct.required_fields;
+  }
+
   console.log("=".repeat(60));
-  console.log("  Validate extracted content");
+  console.log(`  Validate extracted content — ${site.siteName}`);
   console.log("=".repeat(60));
 
   const mdFiles = walkMdFiles(PATHS.content);
 
   if (mdFiles.length === 0) {
     console.error(`\n❌ No .md files found in ${PATHS.content}`);
-    console.error(`   Run: npm run extract`);
+    console.error(`   Run: npm run extract -- --config ${configPath}`);
     process.exit(1);
   }
 
@@ -199,7 +256,12 @@ function main() {
   let warningCount = 0;
 
   for (const file of mdFiles) {
-    const result = validateFile(file);
+    const result = validateFile(
+      file,
+      PATHS.content,
+      requiredFieldsMap,
+      site.contentTypeNames
+    );
     results.push(result);
 
     if (result.valid) {
@@ -229,6 +291,8 @@ function main() {
     JSON.stringify(
       {
         timestamp: new Date().toISOString(),
+        configPath,
+        siteUrl: site.siteUrl,
         totalFiles: mdFiles.length,
         valid: validCount,
         invalid: invalidCount,
@@ -254,4 +318,15 @@ function main() {
   }
 }
 
-main();
+// Only run main() when executed directly
+const isDirectRun =
+  process.argv[1] &&
+  (process.argv[1].endsWith("validate.ts") ||
+   process.argv[1].endsWith("validate.js"));
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error("Unexpected error:", err);
+    process.exit(1);
+  });
+}

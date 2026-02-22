@@ -5,10 +5,7 @@
   "type": "module",
   "scripts": {
     "check-ollama": "tsx scripts/check-ollama.ts",
-    "classify": "tsx scripts/classify-pages.ts",
     "extract": "tsx scripts/orchestrator.ts",
-    "extract:ollama": "tsx scripts/orchestrator.ts --tier ollama",
-    "extract:claude": "tsx scripts/orchestrator.ts --tier claude",
     "validate": "tsx scripts/validate.ts",
     "test": "vitest run",
     "test:watch": "vitest"

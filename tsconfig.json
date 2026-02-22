@@ -11,6 +11,6 @@
     "resolveJsonModule": true,
     "declaration": true
   },
-  "include": ["lib/**/*.ts", "scripts/**/*.ts", "src/**/*.ts", "tests/**/*.ts"],
+  "include": ["lib/**/*.ts", "legacy/**/*.ts", "scripts/**/*.ts", "src/**/*.ts", "tests/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
