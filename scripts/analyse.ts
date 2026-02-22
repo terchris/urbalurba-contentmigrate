@@ -294,12 +294,20 @@ async function main() {
     logInfo(`Skipping crawl — loading existing files from ${sitePaths.crawlOutputDir}`);
     pages = loadCrawlOutput(sitePaths.crawlOutputDir);
     if (pages.length === 0) {
-      // Fall back to legacy crawl-output/ at project root
+      // Migrate files from legacy crawl-output/ at project root into the proper location
       const legacyCrawlDir = path.join(PROJECT_ROOT, "crawl-output");
-      pages = loadCrawlOutput(legacyCrawlDir);
-      if (pages.length > 0) {
-        logWarning(`No files in ${sitePaths.crawlOutputDir}, loaded ${pages.length} from legacy crawl-output/`);
-      } else {
+      if (fs.existsSync(legacyCrawlDir)) {
+        const legacyFiles = fs.readdirSync(legacyCrawlDir).filter((f) => f.endsWith(".json"));
+        if (legacyFiles.length > 0) {
+          fs.mkdirSync(sitePaths.crawlOutputDir, { recursive: true });
+          for (const file of legacyFiles) {
+            fs.copyFileSync(path.join(legacyCrawlDir, file), path.join(sitePaths.crawlOutputDir, file));
+          }
+          logInfo(`Migrated ${legacyFiles.length} files from legacy crawl-output/ to ${sitePaths.crawlOutputDir}`);
+          pages = loadCrawlOutput(sitePaths.crawlOutputDir);
+        }
+      }
+      if (pages.length === 0) {
         logError("ERR004: No crawl output found. Run without --skip-crawl first.");
         process.exit(1);
       }

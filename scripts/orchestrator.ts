@@ -216,9 +216,7 @@ function formatNumber(n: number): string {
 function loadCrawlPages(crawlOutputDir: string): CrawlPage[] {
   const crawlDir = crawlOutputDir;
   if (!fs.existsSync(crawlDir)) {
-    logError(`ERR001: Crawl output not found: ${crawlDir}`);
-    logInfo("Run the crawl first: cd crawl && python crawl_site.py");
-    process.exit(1);
+    return [];
   }
 
   const files = fs.readdirSync(crawlDir).filter((f) => f.endsWith(".json"));
@@ -379,6 +377,13 @@ async function main() {
   // Load Crawl4AI pages
   logInfo(`Loading crawl output from: ${PATHS.crawlOutput}`);
   let pages = loadCrawlPages(PATHS.crawlOutput);
+
+  if (pages.length === 0) {
+    logError(`ERR006: No crawl output found in ${PATHS.crawlOutput}`);
+    logError("ERR006: Run analyse first: npx tsx scripts/analyse.ts --url <site-url>");
+    process.exit(1);
+  }
+
   logInfo(`Found ${pages.length} crawled pages`);
 
   // Filter HTTP duplicates
