@@ -4,6 +4,7 @@
   "description": "AI-powered website content migration — uses a powerful LLM to analyse any site and a local LLM to bulk-extract structured Markdown + YAML front matter, ready for any static site generator.",
   "type": "module",
   "scripts": {
+    "analyse": "tsx scripts/analyse.ts",
     "check-ollama": "tsx scripts/check-ollama.ts",
     "extract": "tsx scripts/orchestrator.ts",
     "validate": "tsx scripts/validate.ts",
