@@ -1,18 +1,23 @@
 /**
  * claude-client.ts
  *
- * Claude extraction client for complex pages — schema v2.
+ * Claude extraction client for complex pages — config-driven.
  *
  * Input: clean Markdown from Crawl4AI (not raw HTML).
  * Uses the Anthropic API with structured output via tool_use.
  * Claude handles event/debate pages, conference landing pages, and homepage.
+ *
+ * All site-specific configuration (schemas, prompts, models) comes from
+ * the parameters — no hardcoded imports.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { SCHEMAS, type ContentType } from "./schemas.js";
-import { CLAUDE_SYSTEM_PROMPT, makeUserPrompt } from "./prompts.js";
-import { MODELS } from "./config.js";
+
+// ---------------------------------------------------------------------------
+// Client
+// ---------------------------------------------------------------------------
 
 /**
  * Get the Anthropic client. Requires ANTHROPIC_API_KEY env var.
@@ -28,32 +33,48 @@ function getClient(): Anthropic {
   return new Anthropic({ apiKey });
 }
 
+// ---------------------------------------------------------------------------
+// User prompt builder
+// ---------------------------------------------------------------------------
+
+function makeUserPrompt(markdown: string): string {
+  return `Extract structured data from this Markdown content:\n\n${markdown}`;
+}
+
+// ---------------------------------------------------------------------------
+// Extraction
+// ---------------------------------------------------------------------------
+
 /**
  * Extract structured data from Markdown content using Claude.
  *
- * Uses tool_use to enforce structured output matching the archetype-specific
- * Zod schema. The content_type hint tells Claude which schema to expect.
+ * Uses tool_use to enforce structured output matching the provided Zod schema.
  *
  * @param markdown - Clean Markdown content from Crawl4AI
  * @param urlPath - The original URL path (for context)
- * @param contentType - Pre-classified content type (from page routing)
+ * @param contentType - Content type name (for schema lookup)
+ * @param schema - Zod schema to validate against
+ * @param systemPrompt - System prompt for the extraction
+ * @param modelName - Claude model name (e.g. "claude-sonnet-4-20250514")
  * @returns Extracted data as a plain object, or null if extraction failed
  */
 export async function extractWithClaude(
   markdown: string,
   urlPath: string,
-  contentType: ContentType = "event"
+  contentType: string,
+  schema: z.ZodObject<any>,
+  systemPrompt: string,
+  modelName: string
 ): Promise<{ data: Record<string, unknown>; elapsed: number } | null> {
   const client = getClient();
-  const schema = SCHEMAS[contentType];
   const jsonSchema = zodToJsonSchema(schema);
   const startTime = Date.now();
 
   try {
     const response = await client.messages.create({
-      model: MODELS.claude,
+      model: modelName,
       max_tokens: 8192,
-      system: CLAUDE_SYSTEM_PROMPT,
+      system: systemPrompt,
       tools: [
         {
           name: "save_extraction",
@@ -86,7 +107,7 @@ export async function extractWithClaude(
       return null;
     }
 
-    // Validate against the archetype-specific Zod schema
+    // Validate against the Zod schema
     const parsed = schema.parse(toolUse.input);
 
     return { data: parsed as Record<string, unknown>, elapsed };

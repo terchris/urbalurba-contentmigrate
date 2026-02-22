@@ -1,0 +1,305 @@
+# site-config.yaml — smartebyernorge.no
+#
+# This is a reference config manually translated from the existing hardcoded
+# TypeScript files (config.ts, schemas.ts, prompts.ts, clean-body.ts).
+# It serves as both a test fixture and a working example.
+
+version: 1
+
+site:
+  url: https://www.smartebyernorge.no
+  name: Smarte Byer Norge
+
+crawl:
+  skip_patterns:
+    - '\?'
+    - '/category/'
+    - '/tag/'
+    - '/author/'
+    - '\?format=rss'
+    - '/cart'
+    - '/search'
+    - '/login'
+    - '\.pdf$'
+    - '\.jpg$|\.png$|\.gif$'
+
+content_types:
+  - name: blog
+    url_patterns:
+      - '^/blogg/'
+    output_dir: blogg
+    schema:
+      base: true
+      extras: {}
+    extraction_prompt: |
+      You are a content extraction engine for the Norwegian smart cities website smartebyernorge.no.
+      Extract metadata from blog posts. Language is Norwegian (nb). Dates in ISO 8601.
+      Author is a flat string. Tags are lowercase. Slug from URL path.
+    required_fields:
+      - title
+      - slug
+      - date
+
+  - name: news
+    url_patterns:
+      - '^/nyheter/'
+    output_dir: nyheter
+    schema:
+      base: true
+      extras: {}
+    extraction_prompt: |
+      You are a content extraction engine for the Norwegian smart cities website smartebyernorge.no.
+      Extract metadata from news articles. Language is Norwegian (nb). Dates in ISO 8601.
+      Author is a flat string. Tags are lowercase. Slug from URL path.
+    required_fields:
+      - title
+      - slug
+      - date
+
+  - name: english_news
+    url_patterns:
+      - '^/english-news/'
+    output_dir: english-news
+    schema:
+      base: true
+      extras: {}
+    extraction_prompt: |
+      You are a content extraction engine for the Norwegian smart cities website smartebyernorge.no.
+      Extract metadata from English news articles. Language is English (en). Dates in ISO 8601.
+      Author is a flat string. Tags are lowercase. Slug from URL path.
+    required_fields:
+      - title
+      - slug
+      - date
+
+  - name: event
+    url_patterns:
+      - '^/arendalsuka-blog/'
+      - 'smartbydebatten'
+      - '/debatt-'
+      - '/program/debatt'
+      - '^/evolve2021content/bolk/'
+      - '^/evolve2021content/program/'
+      - '^/evolve2021content/workshop/'
+      - 'workshop-smarte-byer'
+      - 'slik-foregar-smartbydebatten'
+      - 'smarte-losninger-for-smarte-samfunn'
+      - 'hvem-kommer'
+      - 'digitale-trusler'
+      - 'klima-miljokriser'
+      - 'matsikkerhet'
+      - 'lansering-av-smartbyavtalen'
+    output_dir: arendalsuka
+    schema:
+      base: true
+      extras:
+        event_date:
+          type: string
+          description: "Event date YYYY-MM-DD (may differ from publish date)"
+          required: true
+        event_time:
+          type: string
+          description: "Time range e.g. '11:00-11:45' or just start time, or empty"
+        venue:
+          type: string
+          description: "Venue name, e.g. 'Arendalsuka'"
+        moderator:
+          type: string
+          description: "Debate leader / ordstyrer name, or empty"
+        panelists:
+          type: object
+          description: "Panel participants — empty array if none"
+          items:
+            name:
+              type: string
+              description: "Full name"
+            title:
+              type: string
+              description: "Job title"
+            organization:
+              type: string
+              description: "Organization name"
+    extraction_prompt: |
+      You are a content extraction engine for smartebyernorge.no, specializing in event/debate pages.
+      These pages describe panel debates, seminars, and events from Arendalsuka and Evolve conferences.
+      Extract panelists from free-text Norwegian prose: "I panelet sitter [Name], [title] i [org]..."
+      Moderator may appear as "Moteleder:", "Ordstyrer:", or "Debatten ledes av [Name]".
+      Event timing: look for "kl. 11:00-11:45" patterns. Dates in ISO 8601.
+      Language is Norwegian (nb). Tags are lowercase.
+    required_fields:
+      - title
+      - slug
+      - event_date
+
+  - name: conference
+    url_patterns:
+      - '^/arendalsuka$'
+      - '^/evolve2021$'
+    output_dir: konferanser
+    schema:
+      base: true
+      extras:
+        conference_name:
+          type: string
+          description: "e.g. 'Evolve Arena 2021'"
+          required: true
+        conference_year:
+          type: number
+          description: "e.g. 2021"
+          required: true
+        theme:
+          type: string
+          description: "Conference theme, or empty"
+    extraction_prompt: |
+      You are a content extraction engine for smartebyernorge.no conference landing pages.
+      Extract conference name, year, and theme. These are composite pages.
+      Language is Norwegian (nb). Dates in ISO 8601.
+    required_fields:
+      - title
+      - slug
+      - conference_name
+      - conference_year
+
+  - name: person
+    url_patterns:
+      - '/person/'
+      - '/people/'
+      - '/ressurspersoner/'
+    output_dir: personer
+    schema:
+      base: true
+      extras:
+        full_name:
+          type: string
+          description: "Full name of the person"
+          required: true
+        job_title:
+          type: string
+          description: "Job title"
+        organization:
+          type: string
+          description: "Organization name"
+        photo:
+          type: image
+          description: "Profile photo"
+    extraction_prompt: |
+      You are a content extraction engine for smartebyernorge.no person profiles.
+      Extract full name, job title, organization, and profile photo.
+      Language is Norwegian (nb).
+    required_fields:
+      - title
+      - slug
+      - full_name
+
+  - name: tech
+    url_patterns:
+      - '^/tech/'
+      - '^/concept/'
+      - '^/product/'
+      - '^/tjeneste/'
+    output_dir: tech
+    schema:
+      base: true
+      extras:
+        solution_name:
+          type: string
+          description: "Product/solution name"
+          required: true
+        external_url:
+          type: string
+          description: "Link to company website, or empty"
+    extraction_prompt: |
+      You are a content extraction engine for smartebyernorge.no technology/solution pages.
+      Extract solution name and external URL. Language is Norwegian (nb).
+    required_fields:
+      - title
+      - slug
+      - solution_name
+
+  - name: press
+    url_patterns:
+      - '^/press/'
+    output_dir: presse
+    schema:
+      base: true
+      extras:
+        source_publication:
+          type: string
+          description: "e.g. 'EiendomsWatch'"
+          required: true
+        original_url:
+          type: string
+          description: "Link to original article"
+    extraction_prompt: |
+      You are a content extraction engine for smartebyernorge.no press coverage pages.
+      Extract source publication name and original article URL. Language is Norwegian (nb).
+    required_fields:
+      - title
+      - slug
+      - source_publication
+
+  - name: page
+    url_patterns:
+      - '^/$'
+    output_dir: sider
+    schema:
+      base: true
+      extras: {}
+    extraction_prompt: |
+      You are a content extraction engine for smartebyernorge.no static/institutional pages.
+      Extract title, description, and any relevant metadata. Language is Norwegian (nb) unless
+      under /english-news/ or /about (then English, en).
+    required_fields:
+      - title
+      - slug
+
+cleanup:
+  patterns:
+    - name: nav_links
+      regex: '^\s*\[?\s*(Hjem|Arrangement|Kurs|Tjenester|Nettverk|Ressurser|Om oss|English)\s*\]?\s*\([^)]*\)\s*$'
+      flags: gm
+    - name: logo
+      regex: '^#\s*\[!\[Smarte Byer Norge\]\([^)]*\)\]\([^)]*\)\s*$'
+      flags: gm
+    - name: page_title_duplicate
+      regex: '^.*\s*\u2014\s*Smarte Byer Norge\s*$'
+      flags: m
+    - name: newsletter
+      regex: '###?\s*MELD DEG P\u00c5 V\u00c5RT NYHETSBREV[\s\S]*?(?:Takk!.*\n|SEND\n)'
+      flags: g
+    - name: email_field
+      regex: '^Email Address\s*$'
+      flags: gm
+    - name: send_button
+      regex: '^SEND\s*$'
+      flags: gm
+    - name: thank_you
+      regex: '^Takk! Vi har sendt deg en e-post\.\s*$'
+      flags: gm
+    - name: cookie_footer
+      regex: 'Vi arbeider etter V\u00e6r Varsom.*$'
+      flags: gms
+    - name: address
+      regex: '^Smarte Byer Norge, c\/o.*$'
+      flags: gm
+    - name: social_icons
+      regex: '\[\s*\]\(https?:\/\/(?:www\.)?(?:facebook|linkedin)\.com[^)]*\)\s*'
+      flags: g
+    - name: footer_image
+      regex: '^!\[\]\(https:\/\/images\.squarespace-cdn\.com\/content\/v1\/56fc08f17c65e4e90c66db4c\/1476204400336[^)]*\)\s*$'
+      flags: gm
+    - name: back_to_top
+      regex: '\[Back to Top\][^\n]*'
+      flags: g
+    - name: newer_post
+      regex: 'Newer Post\[.*?\]\([^)]*\)'
+      flags: g
+    - name: older_post
+      regex: 'Older Post\[.*?\]\([^)]*\)'
+      flags: g
+
+llm:
+  analysis_model: claude-sonnet-4-20250514
+  extraction_model: gemma3:4b
+  extraction_context_size: 8192
+  extraction_max_chars: 4000
